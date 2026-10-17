@@ -1,0 +1,16 @@
+{
+  "name": "capture-fps",
+  "productName": "Capture FPS",
+  "version": "1.0.0",
+  "description": "Measure a console game's frame rate from a capture-card recording and burn an FPS overlay into the video.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "cli": "node src/cli.js",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "electron": "43.7.7"
+  }
+}
