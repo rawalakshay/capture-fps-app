@@ -5,6 +5,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { analyse, summarise } = require('../src/core/analysis');
 const { Overlay, createOverlay, assColor, LAYOUT, COLORS } = require('../src/core/overlay');
 
@@ -173,6 +176,17 @@ test('header pills can be turned off and a caption placed on the video', () => {
   assert.deepEqual(wm.find((e) => e.plain === 'x').pos, [24, 1016]);
   assert.ok(!mk({ watermark: '' }).includes('4aLse'));
   assert.ok(mk({ watermark: 'Other' }).includes('}Other'));
+  // A newline would end the subtitle line early.
+  assert.ok(parse(mk({ caption: 'a\nb' })).some((e) => e.plain === 'ab'));
+});
+
+test('writeTo streams the same bytes build returns', () => {
+  const a = analyse(rowsFromCounts(Array(720).fill(1)), HZ, 0.4, 60);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ass-'));
+  const file = path.join(dir, 'overlay.ass');
+  new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE).writeTo(file);
+  assert.equal(fs.readFileSync(file, 'utf8'), new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE).build());
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('the strip and glass looks build cleanly and show the hero', () => {

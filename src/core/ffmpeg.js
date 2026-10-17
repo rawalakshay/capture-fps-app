@@ -28,10 +28,24 @@ function need(tool) {
   return p;
 }
 
+let toolsCache = null;
+
+/** Both tools on PATH and ffmpeg built with libass (the 'ass' filter draws the overlay); checked once. */
 function toolStatus() {
-  const ffmpeg = which('ffmpeg');
-  const ffprobe = which('ffprobe');
-  return { ffmpeg, ffprobe, ok: Boolean(ffmpeg && ffprobe) };
+  if (!toolsCache) {
+    toolsCache = new Promise((resolve) => {
+      const ffmpeg = which('ffmpeg');
+      const ffprobe = which('ffprobe');
+      const done = (reason) => resolve({ ffmpeg, ffprobe, ok: !reason, reason: reason || null });
+      if (!ffmpeg) return done('ffmpeg not found on PATH');
+      if (!ffprobe) return done('ffprobe not found on PATH');
+      execFile(ffmpeg, ['-hide_banner', '-filters'], { windowsHide: true, timeout: 20000, maxBuffer: 1 << 20 }, (err, stdout) => {
+        done(!err && /^\s*\S*\s+ass\s/m.test(stdout) ? null
+          : 'ffmpeg has no subtitle support (libass). Install the Gyan.FFmpeg build.');
+      });
+    });
+  }
+  return toolsCache;
 }
 
 function rate(text) {

@@ -5,7 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { probe, runFfmpeg, seekArgs, spanArgs, gpuStatus } = require('./ffmpeg');
+const { probe, runFfmpeg, seekArgs, spanArgs, gpuStatus, abortError } = require('./ffmpeg');
 const { measureDiffs, analyse, summarise, writeCsvs, perSecondFps } = require('./analysis');
 const { createOverlay, assFilter } = require('./overlay');
 
@@ -35,10 +35,6 @@ function outputSize(info, resolution) {
   const h = RESOLUTIONS[resolution];
   if (!h || h === info.height) return { width: info.width, height: info.height, scaled: false };
   return { width: Math.round((info.width * h) / info.height / 2) * 2, height: h, scaled: true };
-}
-
-function abortError() {
-  return Object.assign(new Error('Cancelled'), { name: 'AbortError' });
 }
 
 /** Decode on the GPU unless told not to; NVENC working means an NVIDIA GPU. */
@@ -108,8 +104,7 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
   // The overlay is laid out for the output size, so it stays sharp when the
   // video is scaled; its format pill names the recording, not the output.
   const title = opts.title || path.parse(video).name;
-  const ass = createOverlay(a, size, title, opts.overlayRate || 30, opts.position || 'right', info, opts).build();
-  fs.writeFileSync(path.join(outDir, 'overlay.ass'), ass, 'utf8');
+  createOverlay(a, size, title, opts.overlayRate || 30, opts.position || 'right', info, opts).writeTo(path.join(outDir, 'overlay.ass'));
   if (signal && signal.aborted) throw abortError();
 
   const q = QUALITY[opts.quality] || QUALITY.standard;
@@ -132,7 +127,7 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
       '-map', '0:v:0', '-map', '0:a:0?',
       '-vf', (size.scaled ? `scale=${size.width}:${size.height}:flags=lanczos,` : '') +
         assFilter('overlay.ass', outDir, fonts),
-      ...video_, '-pix_fmt', 'yuv420p', ...audio, path.basename(dst),
+      ...video_, '-pix_fmt', 'yuv420p', ...audio, dst, // absolute: a name starting with "-" would read as an option
     ], {
       cwd: outDir, signal,
       onProgress: (s) => onProgress({ phase: 'render', fraction: Math.min(1, s / span) }),

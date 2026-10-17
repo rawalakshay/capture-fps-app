@@ -44,20 +44,32 @@ function round(x, n) {
  * diff = Infinity (always a new frame).
  */
 async function measureDiffs(video, work, { start, end, onProgress, signal, hwaccel = false } = {}) {
-  const meta = path.join(work, 'diff_raw.txt');
+  const name = `diff_raw_${process.pid}.txt`; // per process: two app windows may measure the same recording
+  const meta = path.join(work, name);
   const vf = 'scale=640:-2:flags=area,format=gray,' +
     'tblend=all_mode=difference,signalstats,' +
-    'metadata=mode=print:key=lavfi.signalstats.YAVG:file=diff_raw.txt';
-  await runFfmpeg([
-    '-y', ...(hwaccel ? ['-hwaccel', 'cuda'] : []), ...seekArgs(start), '-i', path.resolve(video),
-    ...spanArgs(start, end),
-    '-an', '-sn', '-dn', '-vf', vf, '-f', 'null', '-',
-  ], { cwd: work, onProgress, signal });
+    `metadata=mode=print:key=lavfi.signalstats.YAVG:file=${name}`;
+  let text;
+  try {
+    await runFfmpeg([
+      '-y', ...(hwaccel ? ['-hwaccel', 'cuda'] : []), ...seekArgs(start), '-i', path.resolve(video),
+      ...spanArgs(start, end),
+      '-an', '-sn', '-dn', '-vf', vf, '-f', 'null', '-',
+    ], { cwd: work, onProgress, signal });
+    text = fs.readFileSync(meta, 'utf8');
+  } finally {
+    fs.rmSync(meta, { force: true });
+  }
+  const rows = parseDiffs(text);
+  if (rows.length < 3) throw new Error('Too few frames measured; is this a video file?');
+  return rows;
+}
 
+/** Rows from the metadata filter's text: lines of `pts_time:` then `lavfi.signalstats.YAVG=`. */
+function parseDiffs(text) {
   const times = [];
   const diffs = [];
   let pendingT = null;
-  const text = fs.readFileSync(meta, 'utf8');
   for (const line of text.split(/\r?\n/)) {
     let m = /pts_time:([-0-9.e]+)/.exec(line);
     if (m) {
@@ -71,8 +83,7 @@ async function measureDiffs(video, work, { start, end, onProgress, signal, hwacc
       pendingT = null;
     }
   }
-  fs.rmSync(meta, { force: true });
-  if (times.length < 2) throw new Error('Too few frames measured; is this a video file?');
+  if (times.length < 2) return times.map((t, i) => [t, diffs[i]]);
   // tblend emits one frame per pair, stamped with the later frame; put the
   // very first refresh back in front of it.
   const period = times[1] - times[0];
@@ -250,6 +261,6 @@ function writeCsvs(a, out) {
 
 module.exports = {
   DEFAULT_THRESHOLD, TARGETS, STALL_MS,
-  bisectLeft, bisectRight, measureDiffs, otsuThreshold, percentile,
+  bisectLeft, bisectRight, measureDiffs, parseDiffs, otsuThreshold, percentile,
   inferTarget, analyse, perSecondFps, summarise, writeCsvs,
 };

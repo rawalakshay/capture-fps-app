@@ -80,7 +80,7 @@ async function checkTools() {
     n.textContent = 'ffmpeg ready';
     n.className = 'tools ok';
   } else {
-    n.textContent = `${t.ffmpeg ? 'ffprobe' : 'ffmpeg'} not found on PATH`;
+    n.textContent = t.reason;
     n.className = 'tools bad';
     n.title = 'Install it with: winget install Gyan.FFmpeg, then restart the app.';
   }

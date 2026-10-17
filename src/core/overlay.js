@@ -4,6 +4,7 @@
 // is in CSS px at 1080p, scaled to the output height. Every number states its
 // window, and frames are counted by time so a locked frame rate reads flat.
 
+const fs = require('fs');
 const path = require('path');
 const { bisectLeft, bisectRight, percentile } = require('./analysis');
 
@@ -137,7 +138,7 @@ const fmtMs = (v) => (Math.abs(v - Math.round(v)) < 0.05 ? v.toFixed(0) : v.toFi
 const fmt1 = (v) => (v == null ? '–' : v.toFixed(1));
 const fmt0 = (v) => (v == null ? '–' : v.toFixed(0));
 /** Braces and backslashes would be read as override tags or line breaks. */
-const cleanText = (s) => String(s).replace(/[\\{}]/g, '');
+const cleanText = (s) => String(s).replace(/[\\{}\r\n]/g, '');
 function shortSource(s) {
   if (!s || s === 'default') return 'default';
   return s.startsWith('auto') ? 'auto' : 'set';
@@ -664,7 +665,8 @@ class Overlay {
     }
   }
 
-  build() {
+  /** Run every pass; the events end up in this.lines. */
+  render() {
     const a = this.a;
     const target = a.target, targetMs = 1000.0 / target;
     const refreshMs = a.hz ? 1000.0 / a.hz : targetMs;
@@ -692,8 +694,29 @@ class Overlay {
     for (let u = 0; u < nTick; u++) this.drawFrame(u / this.rate, Math.min(D, (u + 1) / this.rate));
     this.flushSlots(D);
     if (this.lg) this.drawLongGraphBars(D);
+  }
 
-    const head = [
+  /** The whole subtitle as text. Fine for clips of minutes; long clips go through writeTo(). */
+  build() {
+    this.render();
+    return this.head().concat(this.lines).join('\n') + '\n';
+  }
+
+  /** Write the subtitle to a file in slices, so an hour-long clip never needs one 500 MB string. */
+  writeTo(file) {
+    this.render();
+    const fd = fs.openSync(file, 'w');
+    try {
+      fs.writeSync(fd, this.head().join('\n') + '\n');
+      for (let i = 0; i < this.lines.length; i += 50000) fs.writeSync(fd, this.lines.slice(i, i + 50000).join('\n') + '\n');
+    } finally {
+      fs.closeSync(fd);
+    }
+    return file;
+  }
+
+  head() {
+    return [
       '[Script Info]',
       'ScriptType: v4.00+',
       `PlayResX: ${this.w}`,
@@ -712,7 +735,6 @@ class Overlay {
       '[Events]',
       'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
     ];
-    return head.concat(this.lines).join('\n') + '\n';
   }
 }
 
