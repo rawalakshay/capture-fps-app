@@ -78,6 +78,29 @@
         <label for="pos-right"><svg class="pos-icon" viewBox="0 0 32 18" aria-hidden="true"><rect class="pos-frame" x="0.75" y="0.75" width="30.5" height="16.5" rx="2"></rect><rect class="pos-panel" x="21.5" y="2.5" width="8" height="6" rx="1"></rect></svg>Right</label>
       </div>
     </fieldset>
+    <div class="check">
+      <input type="checkbox" id="opt-target-pill" checked>
+      <label for="opt-target-pill">Show TARGET pill (e.g. TARGET 60)</label>
+    </div>
+    <div class="check">
+      <input type="checkbox" id="opt-format-pill" checked>
+      <label for="opt-format-pill">Show capture pill (e.g. 1080P60)</label>
+    </div>
+    <div class="field">
+      <label for="opt-caption">Caption on the video</label>
+      <input id="opt-caption" type="text" placeholder="e.g. Game Benchmark at 1440p" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="opt-caption-pos">Caption position</label>
+      <select id="opt-caption-pos">
+        <option value="top-left" selected>Top left</option>
+        <option value="top-center">Top middle</option>
+        <option value="top-right">Top right</option>
+        <option value="bottom-left">Bottom left</option>
+        <option value="bottom-center">Bottom middle</option>
+        <option value="bottom-right">Bottom right</option>
+      </select>
+    </div>
     <fieldset class="seg-field">
       <legend>Encoder</legend>
       <div class="seg seg-2">

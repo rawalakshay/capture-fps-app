@@ -174,8 +174,9 @@ class Overlay {
    * a: the analysis; size: the output video size the panel is laid out for;
    * capture: the recording's probe info (for the format pill), if different.
    */
-  constructor(a, size, title, rate = 30, position = 'right', capture = null) {
+  constructor(a, size, title, rate = 30, position = 'right', capture = null, opts = {}) {
     this.a = a;
+    this.opts = opts;
     this.k = size.height / 1080.0;
     this.w = size.width;
     this.h = size.height;
@@ -186,6 +187,7 @@ class Overlay {
     this.slots = new Map();
     // Panel origin (1080p px) along the top edge: left, center or right.
     const frameW = this.w / this.k;
+    this.position = position;
     this.ox = position === 'left' ? 24 : position === 'center' ? (frameW - PW) / 2 : frameW - 24 - PW;
     this.oy = 24.0;
   }
@@ -278,6 +280,19 @@ class Overlay {
     this.shape(t0, t1, roundedPath(this.px(this.ox + left), this.px(this.oy + top), this.px(w), this.px(h), this.px(2)),
       PANEL, 0.86, 3);
     this.text(t0, t1, left + 4, top + h - DESCENT * size, this.run(s, MONO_MED, size, LABEL), size, 'l', 4);
+  }
+
+  /** Free text on the video, 24 px in from a corner or edge, outlined so it reads on any footage.
+   * At the top on the panel's side it sits below the panel instead. */
+  drawCaption(D, s, where) {
+    const [v, h] = where.split('-');
+    const frameW = this.w / this.k, margin = 24, size = 28;
+    const an = { top: 7, bottom: 1 }[v] + { left: 0, center: 1, right: 2 }[h];
+    const x = h === 'left' ? margin : h === 'center' ? frameW / 2 : frameW - margin;
+    const underPanel = v === 'top' && h === this.position;
+    const y = v === 'bottom' ? 1080 - margin : underPanel ? this.oy + PH + 16 : margin;
+    this.emit(3, 0, D, `{\\an${an}\\pos(${f1(this.px(x))},${f1(this.px(y))})\\bord${f1(this.px(2))}\\3c${assColor(PANEL)}\\shad0}` +
+      this.run(s, SANS_SEMI, size, TEXT, 0.04));
   }
 
   /** Value box at the top of the frame-time chart for a bar taller than the scale. */
@@ -405,17 +420,20 @@ class Overlay {
     const { target, targetMs, yMax } = this.m;
     const { ox, oy } = this;
     this.shape(0, D, roundedPath(px(ox), px(oy), px(PW), px(PH), px(10)), PANEL, 0.86, 0);
-    // Pills, right to left: target, then the capture format.
-    let right = PW - PAD;
-    let pillsW = this.pill(0, D, right, `TARGET ${target}`);
-    const cap = this.capture;
-    if (cap && cap.height) {
-      right -= pillsW + 6;
-      pillsW += 6 + this.pill(0, D, right, `${cap.height}P${a.hz ? Math.round(a.hz) : ''}`);
+    // Pills, right to left: target, then the capture format; each can be turned off.
+    const cap = this.capture, o = this.opts;
+    let right = PW - PAD, pillsW = 0;
+    for (const s of [o.showTarget !== false && `TARGET ${target}`,
+      o.showFormat !== false && cap && cap.height && `${cap.height}P${a.hz ? Math.round(a.hz) : ''}`]) {
+      if (!s) continue;
+      const w = this.pill(0, D, right, s);
+      right -= w + 6;
+      pillsW += w + 6;
     }
     // Title, cut to fit beside the pills.
     let title = cleanText(this.title).toUpperCase();
-    const avail = IW - pillsW - 8;
+    const avail = IW - Math.max(0, pillsW - 6) - 8;
+    if (o.caption) this.drawCaption(D, cleanText(o.caption), CAPTION_POSITIONS.includes(o.captionPosition) ? o.captionPosition : 'top-left');
     if (sansW(title, 14, 0.08) > avail) {
       while (title.length > 1 && sansW(`${title}…`, 14, 0.08) > avail) title = title.slice(0, -1);
       title = `${title.trimEnd()}…`;
@@ -597,8 +615,9 @@ function assFilter(assName, cwd, fontsDir) {
 }
 
 const POSITIONS = ['left', 'center', 'right'];
+const CAPTION_POSITIONS = ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'];
 
 module.exports = {
-  Overlay, assFilter, assTime, assColor, tc, weightedFrames, POSITIONS, LAYOUT,
+  Overlay, assFilter, assTime, assColor, tc, weightedFrames, POSITIONS, CAPTION_POSITIONS, LAYOUT,
   COLORS: Object.freeze({ PANEL, LINE, TEXT, LABEL, DIM, FOOT, BLUE, AMBER, RED }),
 };

@@ -91,7 +91,8 @@ async function analyseVideo(opts, { onProgress = () => {}, signal } = {}) {
  * Render the overlay video from an analysis.
  * opts: { title?, position = 'right', encoder = 'gpu' | 'cpu',
  *         quality = 'standard', resolution = 'source' | '1080' | '1440' | '2160',
- *         overlayRate = 30, hwDecode? }
+ *         overlayRate = 30, hwDecode?, showTarget = true, showFormat = true,
+ *         caption?, captionPosition = 'top-left' }
  * onProgress({ phase: 'overlay'|'render', fraction })
  */
 async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = {}) {
@@ -106,7 +107,7 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
   // The overlay is laid out for the output size, so it stays sharp when the
   // video is scaled; its format pill names the recording, not the output.
   const title = opts.title || path.parse(video).name;
-  const ass = new Overlay(a, size, title, opts.overlayRate || 30, opts.position || 'right', info).build();
+  const ass = new Overlay(a, size, title, opts.overlayRate || 30, opts.position || 'right', info, opts).build();
   fs.writeFileSync(path.join(outDir, 'overlay.ass'), ass, 'utf8');
   if (signal && signal.aborted) throw abortError();
 

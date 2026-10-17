@@ -194,6 +194,7 @@ function rememberSelect(id, key) {
 }
 rememberSelect('opt-quality', 'quality');
 rememberSelect('opt-res', 'resolution');
+rememberSelect('opt-caption-pos', 'captionPosition');
 
 // ---------- running ----------
 
@@ -232,6 +233,10 @@ function renderOptions() {
   return {
     title: $('opt-title').value.trim() || null,
     position: radioValue('opt-pos'),
+    showTarget: $('opt-target-pill').checked,
+    showFormat: $('opt-format-pill').checked,
+    caption: $('opt-caption').value.trim() || null,
+    captionPosition: $('opt-caption-pos').value,
     encoder: radioValue('opt-enc'),
     quality: $('opt-quality').value,
     resolution: $('opt-res').value,

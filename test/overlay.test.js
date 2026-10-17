@@ -153,6 +153,22 @@ test('recorder drops are flagged on the chart and in the footer', () => {
   assert.ok(ass.includes('TEST CLIP'));
 });
 
+test('header pills can be turned off and a caption placed on the video', () => {
+  const a = analyse(rowsFromCounts(Array(720).fill(1)), HZ, 0.4, 60);
+  const mk = (opts) => new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE, opts).build();
+  const off = mk({ showTarget: false, showFormat: false });
+  assert.ok(!off.includes('TARGET 60') && !off.includes('1080P60'));
+  assert.ok(mk({ showFormat: false }).includes('TARGET 60'));
+  const cap = parse(mk({ caption: 'Game {Benchmark} at 1440p', captionPosition: 'bottom-right' }));
+  const c = cap.filter((e) => e.plain === 'Game Benchmark at 1440p');
+  assert.equal(c.length, 1);
+  assert.deepEqual(c[0].pos, [1896, 1056]);
+  assert.ok(/\\an3\\/.test(c[0].text));
+  // At the top on the panel's side the caption drops below the panel.
+  const under = parse(mk({ caption: 'x', captionPosition: 'top-left' })).find((e) => e.plain === 'x');
+  assert.deepEqual(under.pos, [24, OY + LAYOUT.PH + 16]);
+});
+
 test('pacing shows the share of frames by length', () => {
   const { events } = build(Array(360).fill(2), 30);
   assert.equal(active(events, 6.0).filter((e) => e.plain === '≤33.3 ms  100%').length, 1);
