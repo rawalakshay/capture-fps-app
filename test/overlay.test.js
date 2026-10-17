@@ -193,7 +193,9 @@ test('the strip and glass looks build cleanly and show the hero', () => {
     assert.ok(box.text.includes(`\\c${assColor(COLORS.PANEL)}`) && box.text.includes('\\3c&H00FFFFFF') && box.text.includes('\\3a&HEB&'), `${style}: box colours`);
     assert.ok(events.length <= 350 * a.duration + 100, `${style}: ${events.length} events`);
   }
-  assert.ok(createOverlay(a, SIZE, 'x', 30, 'right', SIZE, { style: 'nope' }) instanceof Overlay);
+  for (const style of ['nope', 'constructor', '__proto__']) {
+    assert.equal(createOverlay(a, SIZE, 'x', 30, 'right', SIZE, { style }).constructor, Overlay, `${style} falls back to the panel`);
+  }
 });
 
 test('the long graph scrolls one moving event per frame', () => {

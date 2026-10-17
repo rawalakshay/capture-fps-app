@@ -593,7 +593,7 @@ class Overlay {
       this.run(fmt1(f.ftMax), MONO_SEMI, 16, f.ftMax == null ? TEXT : ftTextColor(f.ftMax, targetMs)) +
       this.run(' ms', MONO_SEMI, 13, DIM), 16, 'r'));
     this.text(tt, tEnd, PW - PAD, L.FOOT_BASE, this.run(tc(tt), MONO_MED, 13, LABEL), 13, 'r');
-    this.drawLongGraphTick(tt);
+    this.drawLongGraphTick(tt, f);
   }
 
   // ---- long frame-time graph: 70 % of the width along the bottom edge, a 7.5 s window that scrolls ----
@@ -625,11 +625,10 @@ class Overlay {
     this.chartLabelLeft(0, D, x0, top + LG_CH - g2 + 3, (2 * targetMs).toFixed(1));
   }
 
-  /** The frame on screen, growing at the right edge, and the window's MAX. */
-  drawLongGraphTick(tt) {
+  /** The frame on screen (f, from frameAt(tt)) growing at the right edge, and the window's MAX. */
+  drawLongGraphTick(tt, f) {
     if (!this.lg) return;
     const g = this.lg, { targetMs } = this.m, scale = 3 * targetMs;
-    const f = this.frameAt(tt);
     const wl = Math.min(g.iw, Math.max(1, f.elapsed / 1000 * g.speed));
     const hl = Math.max(2.0, Math.min(1.0, f.elapsed / scale) * LG_CH);
     this.liveBar(tt, g.rx + LG_PAD + g.iw - wl, wl + 2, hl, f.stalled, g.ry + LG_TOP + LG_CH, 'lgLive');
@@ -721,10 +720,13 @@ class Overlay {
 
 const STRIP = (() => {
   const heroX = 22, heroEnd = heroX + monoW('888', 46) * 0.97 + 8 + 36 + 22;
-  const stats = heroEnd + 23, chart = stats + 4 * 80 + 2 + 23, pacing = chart + 269 + 22 + 23;
+  const col = 88; // fits "483.3 ms" (five mono digits at 22 px plus the unit)
+  const stats = heroEnd + 23, chart = stats + 4 * col + 2 + 23, pacing = chart + 269 + 22 + 23;
   const rightBlock = pacing + 120 + 22 + 23, right = rightBlock + 196;
-  return Object.freeze({ H: 76, W: Math.round(right + 22), heroX, divs: [heroEnd, stats - 23 + 4 * 80 + 2, chart - 23 + 269 + 22, rightBlock - 23],
+  const S = Object.freeze({ H: 76, W: Math.round(right + 22), heroX, col, divs: [heroEnd, stats + 4 * col + 2, chart + 269 + 22, rightBlock - 23],
     stats, chart, pacing, right });
+  if (S.divs[1] < stats + 4 * col || S.divs[2] < chart + 269) throw new Error('strip divider inside a group');
+  return S;
 })();
 
 class StripOverlay extends Overlay {
@@ -737,7 +739,7 @@ class StripOverlay extends Overlay {
     this.shape(0, D, roundedPath(this.px(this.ox), this.px(this.oy), this.px(W), this.px(H), this.px(16)), PANEL, 0.08, 0, 0xFFFFFF, 0.84);
     for (const x of S.divs) this.rects(0, D, [[x, 18, 1, 40]], LINE, 1.0, 1);
     ['FRAME', 'AVG 10 S', '1% LOW', 'MAX'].forEach((s, i) => {
-      this.text(0, D, S.stats + i * 80, 31, this.run(s, SANS_MED, 11, FOOT, 0.06), 11);
+      this.text(0, D, S.stats + i * S.col, 31, this.run(s, SANS_MED, 11, FOOT, 0.06), 11);
     });
     this.text(0, D, S.pacing, 31, this.run('PACING 10 S', SANS_MED, 11, FOOT, 0.06), 11);
     this.drawPills(D, S.right, 16, 13);
@@ -752,8 +754,8 @@ class StripOverlay extends Overlay {
     const lx = S.heroX + monoW(heroS, 46, -0.03) + 8;
     this.slot('heroFps', 3, tq, this.textBody(lx, 37, this.run('FPS', SANS_SEMI, 13, LABEL, 0.06), 13));
     this.slot('heroSub', 3, tq, this.textBody(lx, 54, this.run('0.5 S', SANS_MED, 11, FOOT, 0.06), 11));
-    this.text(tq, tEnd, S.stats + 80, 56, this.run(fmt1(n.avg), MONO_SEMI, 22, n.avg == null ? TEXT : levelColor(n.avg, target)), 22);
-    this.text(tq, tEnd, S.stats + 160, 56, this.run(fmt1(n.low), MONO_SEMI, 22, n.low == null ? TEXT : levelColor(n.low, target)), 22);
+    this.text(tq, tEnd, S.stats + S.col, 56, this.run(fmt1(n.avg), MONO_SEMI, 22, n.avg == null ? TEXT : levelColor(n.avg, target)), 22);
+    this.text(tq, tEnd, S.stats + 2 * S.col, 56, this.run(fmt1(n.low), MONO_SEMI, 22, n.low == null ? TEXT : levelColor(n.low, target)), 22);
     const p = n.pacing;
     if (!p) return;
     const sh = (v) => v / p.n, pct = (v) => `${Math.round(sh(v) * 100)}%`;
@@ -766,9 +768,9 @@ class StripOverlay extends Overlay {
     const f = this.frameAt(tt), S = STRIP, { targetMs } = this.m;
     const ms = (v) => this.run(fmt1(v), MONO_SEMI, 22, v == null ? TEXT : ftTextColor(v, targetMs)) + this.run(' ms', MONO_SEMI, 11, DIM);
     this.slot('last', 3, tt, this.textBody(S.stats, 56, ms(f.lastMs), 22));
-    this.slot('ftMax', 3, tt, this.textBody(S.stats + 240, 56, ms(f.ftMax), 22));
+    this.slot('ftMax', 3, tt, this.textBody(S.stats + 3 * S.col, 56, ms(f.ftMax), 22));
     this.ftChart(tt, f, { key: 'sft', x: S.chart, top: 18, w: 269, h: 40, slots: FT_SHOW + 1 });
-    this.drawLongGraphTick(tt);
+    this.drawLongGraphTick(tt, f);
   }
 }
 
@@ -839,7 +841,7 @@ class GlassOverlay extends Overlay {
       this.run('MAX ', SANS_SEMI, 12, LABEL, 0.06) + this.run(fmt1(f.ftMax), MONO_SEMI, 12, f.ftMax == null ? TEXT : ftTextColor(f.ftMax, targetMs)) +
       this.run(' ms', MONO_SEMI, 10, DIM), 12, 'r'));
     this.ftChart(tt, f, { key: 'gft', x: 16, top: 266, w: G.W - 32, h: 50, slots: FT_SHOW + 1 });
-    this.drawLongGraphTick(tt);
+    this.drawLongGraphTick(tt, f);
   }
 }
 
@@ -847,7 +849,7 @@ const STYLES = ['panel', 'strip', 'glass'];
 const LOOKS = { panel: Overlay, strip: StripOverlay, glass: GlassOverlay };
 /** The overlay for opts.style (panel when unknown). */
 function createOverlay(a, size, title, rate, position, capture, opts = {}) {
-  return new (LOOKS[opts.style] || Overlay)(a, size, title, rate, position, capture, opts);
+  return new (STYLES.includes(opts.style) ? LOOKS[opts.style] : Overlay)(a, size, title, rate, position, capture, opts);
 }
 
 /** ffmpeg 'ass' filter, pointed at the bundled fonts. */
