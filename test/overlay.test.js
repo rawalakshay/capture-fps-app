@@ -6,7 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { analyse, summarise } = require('../src/core/analysis');
-const { Overlay, assColor, LAYOUT, COLORS } = require('../src/core/overlay');
+const { Overlay, createOverlay, assColor, LAYOUT, COLORS } = require('../src/core/overlay');
 
 const HZ = 60;
 const SIZE = { width: 1920, height: 1080, hz: HZ };
@@ -173,6 +173,45 @@ test('header pills can be turned off and a caption placed on the video', () => {
   assert.deepEqual(wm.find((e) => e.plain === 'x').pos, [24, 1016]);
   assert.ok(!mk({ watermark: '' }).includes('4aLse'));
   assert.ok(mk({ watermark: 'Other' }).includes('}Other'));
+});
+
+test('the strip and glass looks build cleanly and show the hero', () => {
+  const a = analyse(rowsFromCounts(Array(720).fill(1)), HZ, 0.4, 60);
+  for (const [style, x, base, size] of [['strip', 22, 54, 46], ['glass', 16, 114, 76]]) {
+    const ov = createOverlay(a, SIZE, 'Test clip', 30, 'right', SIZE, { style });
+    const W = ov.W;
+    assert.ok(W > 0 && W < 1920 && W !== LAYOUT.PW, `${style}: own width (${W})`);
+    const ass = ov.build(), events = parse(ass);
+    assert.ok(!/NaN|undefined|Infinity|null/.test(ass), `${style}: no stray values`);
+    const X = 1920 - 24 - W + x, Y = OY + base + 0.275 * size;
+    const hero = active(events, 6.0).filter((e) => e.pos && Math.abs(e.pos[0] - X) < 0.11 && Math.abs(e.pos[1] - Y) < 0.11);
+    assert.equal(hero.length, 1, `${style}: one hero text`);
+    assert.equal(hero[0].plain, '60');
+    assert.ok(ass.includes('TARGET 60') && ass.includes('TEST CLIP'), `${style}: pills and title`);
+    // The box is a dark fill with a faint white edge, not the other way round.
+    const box = events.find((e) => e.layer === 0 && e.drawing);
+    assert.ok(box.text.includes(`\\c${assColor(COLORS.PANEL)}`) && box.text.includes('\\3c&H00FFFFFF') && box.text.includes('\\3a&HEB&'), `${style}: box colours`);
+    assert.ok(events.length <= 350 * a.duration + 100, `${style}: ${events.length} events`);
+  }
+  assert.ok(createOverlay(a, SIZE, 'x', 30, 'right', SIZE, { style: 'nope' }) instanceof Overlay);
+});
+
+test('the long graph scrolls one moving event per frame', () => {
+  const a = analyse(rowsFromCounts([29, ...Array(354).fill(2)]), HZ, 0.4, 30);
+  const ass = new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE,
+    { longGraph: true, longGraphOpacity: 0.5, caption: 'Cap', captionPosition: 'bottom-center' }).build();
+  const events = parse(ass);
+  const moving = events.filter((e) => /\\move\(/.test(e.text));
+  // The last frame ends with the clip, so its bar never shows; the 483 ms frame adds a value box and its text.
+  assert.equal(moving.length, a.frameMs.length - 1 + 2);
+  assert.ok(moving.every((e) => /\\clip\(/.test(e.text)), 'every moving event is clipped to the chart');
+  const first = moving.find((e) => e.drawing && e.colors.includes(RED));
+  assert.ok(Math.abs(first.start - 29 / 60) < 0.011, 'the stall bar appears when that frame ends');
+  // Background at 50 %: the graph box is a layer-0 drawing with alpha 80.
+  assert.ok(events.some((e) => e.layer === 0 && e.drawing && e.text.includes('\\1a&H80&')), 'graph background at 50 %');
+  assert.deepEqual(events.find((e) => e.plain === 'Cap').pos, [960, 1080 - 24 - 116 - 16]);
+  assert.ok(ass.includes('LAST 7.5 S'));
+  assert.ok(events.length <= 500 * a.duration + 100, `${events.length} events for ${a.duration} s`);
 });
 
 test('pacing shows the share of frames by length', () => {

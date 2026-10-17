@@ -26,8 +26,11 @@ npm start
 1. Choose a recording, or drop it on the window.
 2. Optionally set a title, a start and end time, the target (20/30/60 fps)
    or a threshold. Leave target and threshold on Auto unless the results
-   look wrong. **Overlay position** puts the panel at the top left, middle or
-   right of the frame. The **TARGET** and capture format (**1080P60**) pills
+   look wrong. **Overlay look** picks the Panel (the full instrument panel,
+   the default), the Strip (one bar along the top edge) or Glass (three
+   tiles). **Overlay position** puts it at the top left, middle or right of
+   the frame. **Long frame-time graph** adds a scrolling 7.5 s frame-time
+   strip across 70 % of the bottom edge, with its own background opacity. The **TARGET** and capture format (**1080P60**) pills
    in the panel header can each be turned off. A **Caption** is free text
    (say, "Game Benchmark at 1440p") drawn in any corner or edge of the video;
    at the top on the panel's side it sits just below the panel. Every video
@@ -111,6 +114,7 @@ node src/cli.js run.mp4 [--no-video] [--start S] [--end S] [--target 30]
                         [--no-target-pill] [--no-format-pill] [--watermark T | --no-watermark]
                         [--caption T] [--caption-position top-left|top-center|top-right|
                                                           bottom-left|bottom-center|bottom-right]
+                        [--style panel|strip|glass] [--long-graph] [--long-graph-opacity 0.86]
 ```
 
 ## Layout

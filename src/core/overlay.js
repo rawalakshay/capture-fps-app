@@ -24,6 +24,7 @@ const FT_SHOW = 89;                     // frame-time chart: 89 completed frames
 const MIN_FRAMES_LOW = 20;              // frames a window needs before a percentile is shown
 const STALL_LIVE_MS = 100, STALL_LIVE_FRAMES = 3; // the frame on screen counts as a stall after this
 const MAX_OVERFLOW_LABELS = 4;
+const LG_H = 116, LG_PAD = 16, LG_TOP = 32, LG_CH = 72, LG_WIN = 7.5; // long graph box, chart top/height, window s
 const WATERMARK = '4aLse Benchmarks';     // bottom left of every video; opts.watermark overrides, '' removes it
 
 // Layout in panel px: text baselines and box tops, as in the design.
@@ -188,10 +189,15 @@ class Overlay {
     this.slots = new Map();
     // Panel origin (1080p px) along the top edge: left, center or right.
     const frameW = this.w / this.k;
+    this.W = this.constructor.W;
+    this.H = this.constructor.H;
     this.position = position;
-    this.ox = position === 'left' ? 24 : position === 'center' ? (frameW - PW) / 2 : frameW - 24 - PW;
+    this.ox = position === 'left' ? 24 : position === 'center' ? (frameW - this.W) / 2 : frameW - 24 - this.W;
     this.oy = 24.0;
   }
+
+  static W = PW;
+  static H = PH;
 
   px(v) { return v * this.k; }
 
@@ -267,11 +273,11 @@ class Overlay {
   // ---- drawing helpers (panel px) ----
 
   /** Hollow pill with mono text, right edge at rightX; returns its width. */
-  pill(t0, t1, rightX, s) {
-    const w = monoW(s, 13) + 16;
-    this.shape(t0, t1, roundedPath(this.px(this.ox + rightX - w + 0.5), this.px(this.oy + LAYOUT.PILL_TOP),
-      this.px(w - 1), this.px(LAYOUT.PILL_H), this.px(4)), PANEL, 1.0, 1, LINE);
-    this.text(t0, t1, rightX - w / 2, LAYOUT.PILL_BASE, this.run(s, MONO_MED, 13, DIM), 13, 'c');
+  pill(t0, t1, rightX, s, top = LAYOUT.PILL_TOP, size = 13) {
+    const w = monoW(s, size) + 16, h = size === 13 ? LAYOUT.PILL_H : size * FS_PER_PX + 4;
+    this.shape(t0, t1, roundedPath(this.px(this.ox + rightX - w + 0.5), this.px(this.oy + top),
+      this.px(w - 1), this.px(h), this.px(4)), PANEL, 1.0, 1, LINE);
+    this.text(t0, t1, rightX - w / 2, top + LAYOUT.PILL_BASE - LAYOUT.PILL_TOP, this.run(s, MONO_MED, size, DIM), size, 'c');
     return w;
   }
 
@@ -291,8 +297,9 @@ class Overlay {
     const an = { top: 7, bottom: 1 }[v] + { left: 0, center: 1, right: 2 }[h];
     const x = h === 'left' ? margin : h === 'center' ? frameW / 2 : frameW - margin;
     const underPanel = v === 'top' && h === this.position;
-    const lift = aboveWatermark && h === 'left' ? 40 : 0; // bottom left is the watermark's spot
-    const y = v === 'bottom' ? 1080 - margin - lift : underPanel ? this.oy + PH + 16 : margin;
+    // Bottom left is the watermark's spot; with the long graph on, the whole bottom edge is taken.
+    const lift = this.lg ? this.lg.gy - 16 - (1080 - margin) : aboveWatermark && h === 'left' ? -40 : 0;
+    const y = v === 'bottom' ? 1080 - margin + lift : underPanel ? this.oy + this.H + 16 : margin;
     this.emit(3, 0, D, `{\\an${an}\\pos(${f1(this.px(x))},${f1(this.px(y))})\\bord${f1(this.px(2))}\\3c${assColor(PANEL)}\\shad0}` +
       this.run(s, SANS_SEMI, size, TEXT, 0.04));
   }
@@ -304,22 +311,45 @@ class Overlay {
   }
 
   /** Value box at the top of the frame-time chart for a bar taller than the scale. */
-  overflowLabel(i, t, xBar, barW, ms) {
+  overflowLabel(i, t, xBar, barW, ms, top = LAYOUT.FT_TOP + 2, mid = PAD + IW / 2, key = 'ovl') {
     const s = ms.toFixed(0), size = 13, w = monoW(s, size) + 8, h = 17;
-    const lx = xBar + barW / 2 > PAD + IW / 2 ? xBar - 2 - w : xBar + barW + 2;
-    const top = LAYOUT.FT_TOP + 2;
-    this.slot(`ovl${i}b`, 3, t, this.shapeBody(roundedPath(this.px(this.ox + lx), this.px(this.oy + top),
+    const lx = xBar + barW / 2 > mid ? xBar - 2 - w : xBar + barW + 2;
+    this.slot(`${key}${i}b`, 3, t, this.shapeBody(roundedPath(this.px(this.ox + lx), this.px(this.oy + top),
       this.px(w), this.px(h), this.px(2)), PANEL, 0.86));
-    this.slot(`ovl${i}t`, 4, t, this.textBody(lx + w - 4, top + h - DESCENT * size, this.run(s, MONO_SEMI, size, RED), size, 'r'));
+    this.slot(`${key}${i}t`, 4, t, this.textBody(lx + w - 4, top + h - DESCENT * size, this.run(s, MONO_SEMI, size, RED), size, 'r'));
   }
 
   /** Outlined bar for the frame still on screen; inset 1 px so the border stays in its column. */
-  liveBar(t, x, w, h, stalled) {
+  liveBar(t, x, w, h, stalled, bottom = LAYOUT.FT_TOP + CHART_H, key = 'ftLive') {
     const col = stalled ? RED : LABEL;
     const { ox, oy } = this;
-    const p = rectsPath([[this.px(ox + x + 1), this.px(oy + LAYOUT.FT_TOP + CHART_H - h + 1),
+    const p = rectsPath([[this.px(ox + x + 1), this.px(oy + bottom - h + 1),
       this.px(Math.max(0.5, w - 2)), this.px(Math.max(0.5, h - 2))]]);
-    this.slot('ftLive', 2, t, this.shapeBody(p, col, 1.0, col, stalled ? 0.55 : 0.3));
+    this.slot(key, 2, t, this.shapeBody(p, col, 1.0, col, stalled ? 0.55 : 0.3));
+  }
+
+  /** Frame-time chart: fixed columns filled from the right, the newest completed frame
+   * next to the frame on screen in the last column; bars taller than the 3x scale get a value box. */
+  ftChart(tt, f, { key, x, top, w, h, slots }) {
+    const { targetMs } = this.m;
+    const fbw = (w - (slots - 1)) / slots, scale = 3 * targetMs;
+    const first = slots - 1 - f.last.length;
+    const groups = new Map([[BLUE, []], [AMBER, []], [RED, []]]);
+    const keys = new Map([[BLUE, `${key}Blue`], [AMBER, `${key}Amber`], [RED, `${key}Red`]]);
+    const overflow = [];
+    f.last.forEach((ms, j) => {
+      const bh = Math.max(2.0, Math.min(1.0, ms / scale) * h);
+      const bx = x + (first + j) * (fbw + 1);
+      groups.get(ftBarColor(ms, targetMs)).push([bx, top + h - bh, fbw, bh]);
+      if (ms > scale * 1.001) overflow.push({ x: bx, ms });
+    });
+    for (const [col, rs] of groups) this.slot(keys.get(col), 2, tt, rs.length ? this.rectsBody(rs, col, 1.0) : null);
+    const shown = overflow.slice(-MAX_OVERFLOW_LABELS), okey = key === 'ft' ? 'ovl' : `${key}ovl`;
+    for (let i = 0; i < MAX_OVERFLOW_LABELS; i++) {
+      if (shown[i]) this.overflowLabel(i, tt, shown[i].x, fbw, shown[i].ms, top + 2, x + w / 2, okey);
+      else { this.slot(`${okey}${i}b`, 3, tt, null); this.slot(`${okey}${i}t`, 4, tt, null); }
+    }
+    this.liveBar(tt, x + (slots - 1) * (fbw + 1), fbw, Math.max(2.0, Math.min(1.0, f.elapsed / scale) * h), f.stalled, top + h, `${key}Live`);
   }
 
   /** Small upward triangle, 7 x 5.5 px, base at baseY, left corner at x. */
@@ -329,17 +359,17 @@ class Overlay {
   }
 
   /** Stacked share bar with labels inside the segments that can hold them. */
-  stackedBar(t0, t1, segs) {
+  stackedBar(t0, t1, segs, x = PAD, y = LAYOUT.PACING_Y, width = IW, h = LAYOUT.PACING_H, labels = true) {
     const live = segs.filter(([share]) => share > 0);
-    const avail = IW - (live.length - 1) * 2;
-    const { PACING_Y: y, PACING_H: h } = LAYOUT;
-    let x = PAD;
+    const avail = width - (live.length - 1) * 2;
     for (const [share, color, label] of live) {
       const w = share * avail;
       this.shape(t0, t1, roundedPath(this.px(this.ox + x), this.px(this.oy + y), this.px(w), this.px(h), this.px(2)), color, 1.0, 2);
-      const pct = `${Math.round(share * 100)}%`, full = `${label}  ${pct}`;
-      const s = w >= monoW(full, 13) + 10 ? full : w >= monoW(pct, 13) + 8 ? pct : null;
-      if (s) this.text(t0, t1, x + w / 2, y + h - 3.5, this.run(s, MONO_SEMI, 13, PANEL), 13, 'c');
+      if (labels) {
+        const pct = `${Math.round(share * 100)}%`, full = `${label}  ${pct}`;
+        const s = w >= monoW(full, 13) + 10 ? full : w >= monoW(pct, 13) + 8 ? pct : null;
+        if (s) this.text(t0, t1, x + w / 2, y + h - 3.5, this.run(s, MONO_SEMI, 13, PANEL), 13, 'c');
+      }
       x += w + 2;
     }
   }
@@ -423,31 +453,49 @@ class Overlay {
 
   // ---- passes ----
 
+  /** Pills, right to left, each optional; returns the width they take (with the 6 px gaps). */
+  drawPills(D, right, top, size) {
+    const a = this.a, cap = this.capture, o = this.opts;
+    let pillsW = 0;
+    for (const s of [o.showTarget !== false && `TARGET ${this.m.target}`,
+      o.showFormat !== false && cap && cap.height && `${cap.height}P${a.hz ? Math.round(a.hz) : ''}`]) {
+      if (!s) continue;
+      const w = this.pill(0, D, right, s, top, size);
+      right -= w + 6;
+      pillsW += w + 6;
+    }
+    return pillsW;
+  }
+
+  /** Title cut to fit `avail` px with an ellipsis. */
+  fitTitle(avail, size = 14, spacing = 0.08) {
+    let title = cleanText(this.title).toUpperCase();
+    if (sansW(title, size, spacing) > avail) {
+      while (title.length > 1 && sansW(`${title}…`, size, spacing) > avail) title = title.slice(0, -1);
+      title = `${title.trimEnd()}…`;
+    }
+    return title;
+  }
+
+  /** What every look shares outside its own box: watermark, caption, long graph chrome. */
+  drawExtras(D) {
+    const o = this.opts;
+    const wm = cleanText(o.watermark ?? WATERMARK);
+    if (wm) this.drawWatermark(D, wm);
+    if (o.caption) this.drawCaption(D, cleanText(o.caption), CAPTION_POSITIONS.includes(o.captionPosition) ? o.captionPosition : 'top-left', !!wm);
+    if (this.lg) this.drawLongGraphChrome(D);
+  }
+
   drawChrome(D) {
     const a = this.a, L = LAYOUT, px = (v) => this.px(v);
     const { target, targetMs, yMax } = this.m;
     const { ox, oy } = this;
     this.shape(0, D, roundedPath(px(ox), px(oy), px(PW), px(PH), px(10)), PANEL, 0.86, 0);
     // Pills, right to left: target, then the capture format; each can be turned off.
-    const cap = this.capture, o = this.opts;
-    let right = PW - PAD, pillsW = 0;
-    for (const s of [o.showTarget !== false && `TARGET ${target}`,
-      o.showFormat !== false && cap && cap.height && `${cap.height}P${a.hz ? Math.round(a.hz) : ''}`]) {
-      if (!s) continue;
-      const w = this.pill(0, D, right, s);
-      right -= w + 6;
-      pillsW += w + 6;
-    }
+    const pillsW = this.drawPills(D, PW - PAD, LAYOUT.PILL_TOP, 13);
     // Title, cut to fit beside the pills.
-    let title = cleanText(this.title).toUpperCase();
-    const avail = IW - Math.max(0, pillsW - 6) - 8;
-    const wm = cleanText(o.watermark ?? WATERMARK);
-    if (wm) this.drawWatermark(D, wm);
-    if (o.caption) this.drawCaption(D, cleanText(o.caption), CAPTION_POSITIONS.includes(o.captionPosition) ? o.captionPosition : 'top-left', !!wm);
-    if (sansW(title, 14, 0.08) > avail) {
-      while (title.length > 1 && sansW(`${title}…`, 14, 0.08) > avail) title = title.slice(0, -1);
-      title = `${title.trimEnd()}…`;
-    }
+    const title = this.fitTitle(IW - Math.max(0, pillsW - 6) - 8);
+    this.drawExtras(D);
     this.text(0, D, PAD, L.TITLE_BASE, this.run(title, SANS_SEMI, 14, DIM, 0.08), 14);
     this.text(0, D, L.COL2_R, L.EYEBROW_BASE, this.run('LAST 10 S', SANS_MED, 13, FOOT, 0.06), 13, 'r');
     this.text(0, D, L.COL1_R, L.GRID_LABEL_BASE, this.run('AVG', SANS_SEMI, 16, LABEL, 0.06), 16, 'r');
@@ -535,26 +583,7 @@ class Overlay {
       this.run(' ms', MONO_SEMI, 13, DIM), 20));
     this.slot('stall', 3, tt, f.stalled ? this.textBody(PW - PAD, L.LAST_BASE,
       this.run('STALL  ', SANS_SEMI, 16, RED, 0.06) + this.run(`${f.elapsed.toFixed(0)} ms`, MONO_SEMI, 20, RED), 20, 'r') : null);
-    // Frame-time chart: 90 fixed columns filled from the right, the newest
-    // completed frame next to the frame on screen in the last column.
-    const slots = FT_SHOW + 1, fbw = (IW - (slots - 1)) / slots, scale = 3 * targetMs;
-    const first = slots - 1 - f.last.length;
-    const groups = new Map([[BLUE, []], [AMBER, []], [RED, []]]);
-    const keys = new Map([[BLUE, 'ftBlue'], [AMBER, 'ftAmber'], [RED, 'ftRed']]);
-    const overflow = [];
-    f.last.forEach((ms, j) => {
-      const h = Math.max(2.0, Math.min(1.0, ms / scale) * CHART_H);
-      const x = PAD + (first + j) * (fbw + 1);
-      groups.get(ftBarColor(ms, targetMs)).push([x, L.FT_TOP + CHART_H - h, fbw, h]);
-      if (ms > scale * 1.001) overflow.push({ x, ms });
-    });
-    for (const [col, rs] of groups) this.slot(keys.get(col), 2, tt, rs.length ? this.rectsBody(rs, col, 1.0) : null);
-    const shown = overflow.slice(-MAX_OVERFLOW_LABELS);
-    for (let i = 0; i < MAX_OVERFLOW_LABELS; i++) {
-      if (shown[i]) this.overflowLabel(i, tt, shown[i].x, fbw, shown[i].ms);
-      else { this.slot(`ovl${i}b`, 3, tt, null); this.slot(`ovl${i}t`, 4, tt, null); }
-    }
-    this.liveBar(tt, PAD + (slots - 1) * (fbw + 1), fbw, Math.max(2.0, Math.min(1.0, f.elapsed / scale) * CHART_H), f.stalled);
+    this.ftChart(tt, f, { key: 'ft', x: PAD, top: L.FT_TOP, w: IW, h: CHART_H, slots: FT_SHOW + 1 });
     const shownFrames = f.last.length + 1;
     this.slot('ftLabelL', 3, tt, this.textBody(PAD, L.FT_LABEL_BASE,
       this.run('FRAME TIME', SANS_SEMI, 16, LABEL, 0.06) +
@@ -564,6 +593,76 @@ class Overlay {
       this.run(fmt1(f.ftMax), MONO_SEMI, 16, f.ftMax == null ? TEXT : ftTextColor(f.ftMax, targetMs)) +
       this.run(' ms', MONO_SEMI, 13, DIM), 16, 'r'));
     this.text(tt, tEnd, PW - PAD, L.FOOT_BASE, this.run(tc(tt), MONO_MED, 13, LABEL), 13, 'r');
+    this.drawLongGraphTick(tt);
+  }
+
+  // ---- long frame-time graph: 70 % of the width along the bottom edge, a 7.5 s window that scrolls ----
+
+  /** Frame px of the graph, and its origin relative to the panel's (rx, ry) for the panel-px helpers. */
+  longGraphGeometry() {
+    const frameW = this.w / this.k;
+    const GW = Math.round(0.7 * frameW), gx = (frameW - GW) / 2, gy = 1080 - 24 - LG_H;
+    const x0 = gx + LG_PAD, iw = GW - 2 * LG_PAD;
+    const op = Number(this.opts.longGraphOpacity);
+    return {
+      GW, gx, gy, x0, iw, top: gy + LG_TOP, speed: iw / LG_WIN,
+      alpha: Number.isFinite(op) ? Math.min(1, Math.max(0, op)) : 0.86,
+      rx: gx - this.ox, ry: gy - this.oy,
+    };
+  }
+
+  drawLongGraphChrome(D) {
+    const g = this.lg, { targetMs } = this.m, px = (v) => this.px(v);
+    const top = g.ry + LG_TOP, x0 = g.rx + LG_PAD;
+    this.shape(0, D, roundedPath(px(g.gx), px(g.gy), px(g.GW), px(LG_H), px(10)), PANEL, g.alpha, 0);
+    this.text(0, D, x0, g.ry + 22, this.run('FRAME TIME', SANS_SEMI, 16, LABEL, 0.06) +
+      this.run(` · LAST ${LG_WIN} S`, SANS_MED, 13, FOOT, 0.04), 16);
+    this.rects(0, D, [[x0, top + LG_CH, g.iw, 1]], LINE, 1.0);
+    const g1 = LG_CH / 3, g2 = LG_CH * 2 / 3;
+    this.rects(0, D, [[x0, top + LG_CH - g1, g.iw, 1]], TEXT, 0.45, 3);
+    this.rects(0, D, [[x0, top + LG_CH - g2, g.iw, 1]], TEXT, 0.22, 3);
+    this.chartLabelLeft(0, D, x0, top + LG_CH - g1 + 3, `${targetMs.toFixed(1)} ms`);
+    this.chartLabelLeft(0, D, x0, top + LG_CH - g2 + 3, (2 * targetMs).toFixed(1));
+  }
+
+  /** The frame on screen, growing at the right edge, and the window's MAX. */
+  drawLongGraphTick(tt) {
+    if (!this.lg) return;
+    const g = this.lg, { targetMs } = this.m, scale = 3 * targetMs;
+    const f = this.frameAt(tt);
+    const wl = Math.min(g.iw, Math.max(1, f.elapsed / 1000 * g.speed));
+    const hl = Math.max(2.0, Math.min(1.0, f.elapsed / scale) * LG_CH);
+    this.liveBar(tt, g.rx + LG_PAD + g.iw - wl, wl + 2, hl, f.stalled, g.ry + LG_TOP + LG_CH, 'lgLive');
+    const { frameMs } = this.a, ends = this.ends;
+    let mx = f.stalled ? f.elapsed : 0;
+    for (let i = bisectRight(ends, tt - LG_WIN), hi = bisectRight(ends, tt); i < hi; i++) if (frameMs[i] > mx) mx = frameMs[i];
+    this.slot('lgMax', 3, tt, mx ? this.textBody(g.rx + g.GW - LG_PAD, g.ry + 22,
+      this.run('MAX ', SANS_SEMI, 16, LABEL, 0.06) + this.run(fmt1(mx), MONO_SEMI, 16, ftTextColor(mx, targetMs)) +
+      this.run(' ms', MONO_SEMI, 13, DIM), 16, 'r') : null);
+  }
+
+  /** One moving event per completed frame: it appears at the right edge when the frame
+   * ends and glides left at the window's speed, clipped to the chart. */
+  drawLongGraphBars(D) {
+    const g = this.lg, { targetMs } = this.m, scale = 3 * targetMs, px = (v) => this.px(v);
+    const { frameMs } = this.a, ends = this.ends;
+    const clip = `\\clip(${Math.floor(px(g.x0))},${Math.floor(px(g.top))},${Math.ceil(px(g.x0 + g.iw))},${Math.ceil(px(g.top + LG_CH + 1))})`;
+    const move = (x1, y) => `\\move(${f1(px(x1))},${f1(px(y))},${f1(px(x1 - g.speed * LG_WIN))},${f1(px(y))},0,${LG_WIN * 1000})`;
+    for (let i = 0; i < frameMs.length; i++) {
+      const e = ends[i];
+      if (e > D) break;
+      const ms = frameMs[i], t1 = Math.min(D, e + LG_WIN);
+      const w = Math.max(1, ms / 1000 * g.speed - 1), h = Math.max(2.0, Math.min(1.0, ms / scale) * LG_CH);
+      const x1 = g.x0 + g.iw - w, y = g.top + LG_CH - h;
+      this.emit(2, e, t1, `{\\an7${move(x1, y)}${clip}\\shad0\\p1\\bord0\\c${assColor(ftBarColor(ms, targetMs))}}` +
+        rectsPath([[0, 0, px(w), px(h)]]) + '{\\p0}');
+      if (ms > scale * 1.001) { // value box to the left of the bar, moving with it
+        const s = ms.toFixed(0), size = 13, lw = monoW(s, size) + 8, lh = 17, lx = x1 - 2 - lw, ly = g.top + 2;
+        this.emit(3, e, t1, `{\\an7${move(lx, ly)}${clip}\\shad0\\p1\\bord0\\c${assColor(PANEL)}\\1a&H24&}` +
+          roundedPath(0, 0, px(lw), px(lh), px(2)) + '{\\p0}');
+        this.emit(4, e, t1, `{\\an3${move(lx + lw - 4, ly + lh)}${clip}\\bord0\\shad0}` + this.run(s, MONO_SEMI, size, RED));
+      }
+    }
   }
 
   build() {
@@ -586,12 +685,14 @@ class Overlay {
     this.slots = new Map();
 
     const D = a.duration;
+    this.lg = this.opts.longGraph ? this.longGraphGeometry() : null;
     this.drawChrome(D);
     const nNum = Math.ceil(D / FPS_BUCKET);
     for (let u = 0; u < nNum; u++) this.drawNumbers(u * FPS_BUCKET, Math.min(D, (u + 1) * FPS_BUCKET));
     const nTick = Math.ceil(D * this.rate);
     for (let u = 0; u < nTick; u++) this.drawFrame(u / this.rate, Math.min(D, (u + 1) / this.rate));
     this.flushSlots(D);
+    if (this.lg) this.drawLongGraphBars(D);
 
     const head = [
       '[Script Info]',
@@ -616,6 +717,139 @@ class Overlay {
   }
 }
 
+// ---- look B: one strip along the top edge ----
+
+const STRIP = (() => {
+  const heroX = 22, heroEnd = heroX + monoW('888', 46) * 0.97 + 8 + 36 + 22;
+  const stats = heroEnd + 23, chart = stats + 4 * 80 + 2 + 23, pacing = chart + 269 + 22 + 23;
+  const rightBlock = pacing + 120 + 22 + 23, right = rightBlock + 196;
+  return Object.freeze({ H: 76, W: Math.round(right + 22), heroX, divs: [heroEnd, stats - 23 + 4 * 80 + 2, chart - 23 + 269 + 22, rightBlock - 23],
+    stats, chart, pacing, right });
+})();
+
+class StripOverlay extends Overlay {
+  static W = STRIP.W;
+  static H = STRIP.H;
+
+  drawChrome(D) {
+    const S = STRIP, { W, H } = S;
+    // Dark fill at 84 % with a faint white hairline edge (shape: fill colour, edge alpha, layer, edge colour, fill alpha).
+    this.shape(0, D, roundedPath(this.px(this.ox), this.px(this.oy), this.px(W), this.px(H), this.px(16)), PANEL, 0.08, 0, 0xFFFFFF, 0.84);
+    for (const x of S.divs) this.rects(0, D, [[x, 18, 1, 40]], LINE, 1.0, 1);
+    ['FRAME', 'AVG 10 S', '1% LOW', 'MAX'].forEach((s, i) => {
+      this.text(0, D, S.stats + i * 80, 31, this.run(s, SANS_MED, 11, FOOT, 0.06), 11);
+    });
+    this.text(0, D, S.pacing, 31, this.run('PACING 10 S', SANS_MED, 11, FOOT, 0.06), 11);
+    this.drawPills(D, S.right, 16, 13);
+    this.text(0, D, S.right, 58, this.run(this.fitTitle(196, 11, 0.08), SANS_SEMI, 11, DIM, 0.08), 11, 'r');
+    this.drawExtras(D);
+  }
+
+  drawNumbers(tq, tEnd) {
+    const n = this.numbersAt(tq), S = STRIP, { target } = this.m;
+    const heroS = fmt0(n.hero);
+    this.text(tq, tEnd, S.heroX, 54, this.run(heroS, MONO_SEMI, 46, n.hero == null ? TEXT : levelColor(n.hero, target), -0.03), 46);
+    const lx = S.heroX + monoW(heroS, 46, -0.03) + 8;
+    this.slot('heroFps', 3, tq, this.textBody(lx, 37, this.run('FPS', SANS_SEMI, 13, LABEL, 0.06), 13));
+    this.slot('heroSub', 3, tq, this.textBody(lx, 54, this.run('0.5 S', SANS_MED, 11, FOOT, 0.06), 11));
+    this.text(tq, tEnd, S.stats + 80, 56, this.run(fmt1(n.avg), MONO_SEMI, 22, n.avg == null ? TEXT : levelColor(n.avg, target)), 22);
+    this.text(tq, tEnd, S.stats + 160, 56, this.run(fmt1(n.low), MONO_SEMI, 22, n.low == null ? TEXT : levelColor(n.low, target)), 22);
+    const p = n.pacing;
+    if (!p) return;
+    const sh = (v) => v / p.n, pct = (v) => `${Math.round(sh(v) * 100)}%`;
+    this.stackedBar(tq, tEnd, [[sh(p.on), BLUE], [sh(p.late), AMBER], [sh(p.stall), RED]], S.pacing, 40, 120, 6, false);
+    this.text(tq, tEnd, S.pacing, 60, this.run(pct(p.on), MONO_SEMI, 11, TEXT), 11);
+    this.text(tq, tEnd, S.pacing + 120, 60, this.run(`${pct(p.late)} · ${pct(p.stall)}`, MONO_MED, 11, p.stall ? RED : FOOT), 11, 'r');
+  }
+
+  drawFrame(tt, tEnd) {
+    const f = this.frameAt(tt), S = STRIP, { targetMs } = this.m;
+    const ms = (v) => this.run(fmt1(v), MONO_SEMI, 22, v == null ? TEXT : ftTextColor(v, targetMs)) + this.run(' ms', MONO_SEMI, 11, DIM);
+    this.slot('last', 3, tt, this.textBody(S.stats, 56, ms(f.lastMs), 22));
+    this.slot('ftMax', 3, tt, this.textBody(S.stats + 240, 56, ms(f.ftMax), 22));
+    this.ftChart(tt, f, { key: 'sft', x: S.chart, top: 18, w: 269, h: 40, slots: FT_SHOW + 1 });
+    this.drawLongGraphTick(tt);
+  }
+}
+
+// ---- look C: three glass tiles ----
+
+const GLASS = Object.freeze({ W: 320, H: 352, tiles: [[0, 134], [144, 76], [230, 122]], lineX: 168, lineR: 304, lineY: 116, lineH: 56, colX: [16, 90, 164, 238] });
+
+class GlassOverlay extends Overlay {
+  static W = GLASS.W;
+  static H = GLASS.H;
+
+  drawChrome(D) {
+    const G = GLASS, { target, yMax } = this.m;
+    for (const [y, h] of G.tiles) {
+      this.shape(0, D, roundedPath(this.px(this.ox), this.px(this.oy + y), this.px(G.W), this.px(h), this.px(14)), PANEL, 0.08, 0, 0xFFFFFF, 0.74);
+    }
+    const pillsW = this.drawPills(D, G.W - 16, 14, 11);
+    this.text(0, D, 18, 29, this.run(this.fitTitle(G.W - 36 - pillsW, 12, 0.08), SANS_SEMI, 12, DIM, 0.08), 12);
+    this.text(0, D, G.lineX, 128, this.run('LAST 10 S', SANS_MED, 10, FOOT, 0.06), 10);
+    const lw = G.lineR - G.lineX;
+    this.rects(0, D, [[G.lineX, G.lineY, lw, 1]], LINE, 1.0);
+    this.rects(0, D, [[G.lineX, G.lineY - G.lineH * (target / yMax), lw, 1]], TEXT, 0.45, 3);
+    // MISSED is right-aligned at the tile edge so a long FRAME value has room.
+    ['AVG 10 S', '1% LOW', 'FRAME', 'MISSED'].forEach((s, i) => {
+      this.text(0, D, i === 3 ? G.W - 16 : G.colX[i], 172, this.run(s, SANS_MED, 11, FOOT, 0.06), 11, i === 3 ? 'r' : 'l');
+    });
+    this.text(0, D, 16, 256, this.run('FRAME TIME', SANS_SEMI, 12, LABEL, 0.06), 12);
+    this.drawExtras(D);
+  }
+
+  drawNumbers(tq, tEnd) {
+    const n = this.numbersAt(tq), G = GLASS, { target, yMax } = this.m;
+    const heroS = fmt0(n.hero);
+    this.text(tq, tEnd, 16, 114, this.run(heroS, MONO, 76, n.hero == null ? TEXT : levelColor(n.hero, target), -0.05), 76);
+    const lx = 16 + monoW(heroS, 76, -0.05) + 4;
+    this.slot('heroFps', 3, tq, this.textBody(lx, 90, this.run('FPS', SANS_SEMI, 13, LABEL, 0.06), 13));
+    this.slot('heroSub', 3, tq, this.textBody(lx, 108, this.run('0.5 S', SANS_MED, 11, FOOT, 0.06), 11));
+    // The 10 s FPS line: a flat-filled area under it and the line as thin quads (libass has no gradients).
+    if (n.bars.length > 1) {
+      const lw = G.lineR - G.lineX, { ox, oy } = this, X = (v) => f1(this.px(ox + v)), Y = (v) => f1(this.px(oy + v));
+      const pts = n.bars.map((b, i) => [G.lineX + i * lw / (FPS_BARS - 1), G.lineY - Math.min(1, b.fps / yMax) * G.lineH]);
+      const area = `m ${X(pts[0][0])} ${Y(G.lineY)} l ` + pts.map(([x, y]) => `${X(x)} ${Y(y)}`).join(' ') + ` ${X(pts[pts.length - 1][0])} ${Y(G.lineY)}`;
+      this.shape(tq, tEnd, area, BLUE, 0.25, 2);
+      const line = pts.slice(1).map(([x, y], i) => {
+        const [x0, y0] = pts[i];
+        return `m ${X(x0)} ${Y(y0 - 1)} l ${X(x)} ${Y(y - 1)} ${X(x)} ${Y(y + 1)} ${X(x0)} ${Y(y0 + 1)}`;
+      }).join(' ');
+      this.shape(tq, tEnd, line, BLUE, 1.0, 2);
+      this.text(tq, tEnd, G.lineR, 128, this.run(`MIN ${fmt0(n.mn)} · MAX ${fmt0(n.mx)}`, MONO_MED, 10, FOOT), 10, 'r');
+    }
+    const val = (i, s, col) => this.text(tq, tEnd, G.colX[i], 203, this.run(s, MONO_SEMI, 22, col), 22);
+    val(0, fmt1(n.avg), n.avg == null ? TEXT : levelColor(n.avg, target));
+    val(1, fmt1(n.low), n.low == null ? TEXT : levelColor(n.low, target));
+    this.text(tq, tEnd, G.W - 16, 203, this.run(n.missed == null ? '–' : `${Math.round(n.missed * 100)}%`, MONO_SEMI, 22, TEXT), 22, 'r');
+    const p = n.pacing;
+    if (!p) return;
+    const sh = (v) => v / p.n, pct = (v) => `${Math.round(sh(v) * 100)}%`;
+    this.stackedBar(tq, tEnd, [[sh(p.on), BLUE], [sh(p.late), AMBER], [sh(p.stall), RED]], 16, 326, G.W - 32, 5, false);
+    this.text(tq, tEnd, 16, 345, this.run(`ON TIME ${pct(p.on)}`, MONO_MED, 10, FOOT), 10);
+    this.text(tq, tEnd, G.W - 16, 345, this.run(`LATE ${pct(p.late)} · STALL ${pct(p.stall)}`, MONO_MED, 10, p.stall ? RED : FOOT), 10, 'r');
+  }
+
+  drawFrame(tt, tEnd) {
+    const f = this.frameAt(tt), G = GLASS, { targetMs } = this.m;
+    this.slot('last', 3, tt, this.textBody(G.colX[2], 203,
+      this.run(fmt1(f.lastMs), MONO_SEMI, 22, f.lastMs == null ? TEXT : ftTextColor(f.lastMs, targetMs)) + this.run(' ms', MONO_SEMI, 11, DIM), 22));
+    this.slot('ftMax', 3, tt, this.textBody(G.W - 16, 256,
+      this.run('MAX ', SANS_SEMI, 12, LABEL, 0.06) + this.run(fmt1(f.ftMax), MONO_SEMI, 12, f.ftMax == null ? TEXT : ftTextColor(f.ftMax, targetMs)) +
+      this.run(' ms', MONO_SEMI, 10, DIM), 12, 'r'));
+    this.ftChart(tt, f, { key: 'gft', x: 16, top: 266, w: G.W - 32, h: 50, slots: FT_SHOW + 1 });
+    this.drawLongGraphTick(tt);
+  }
+}
+
+const STYLES = ['panel', 'strip', 'glass'];
+const LOOKS = { panel: Overlay, strip: StripOverlay, glass: GlassOverlay };
+/** The overlay for opts.style (panel when unknown). */
+function createOverlay(a, size, title, rate, position, capture, opts = {}) {
+  return new (LOOKS[opts.style] || Overlay)(a, size, title, rate, position, capture, opts);
+}
+
 /** ffmpeg 'ass' filter, pointed at the bundled fonts. */
 function assFilter(assName, cwd, fontsDir) {
   if (!fontsDir) return `ass=${assName}`;
@@ -628,6 +862,7 @@ const POSITIONS = ['left', 'center', 'right'];
 const CAPTION_POSITIONS = ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'];
 
 module.exports = {
-  Overlay, assFilter, assTime, assColor, tc, weightedFrames, POSITIONS, CAPTION_POSITIONS, LAYOUT,
+  Overlay, StripOverlay, GlassOverlay, createOverlay, STYLES,
+  assFilter, assTime, assColor, tc, weightedFrames, POSITIONS, CAPTION_POSITIONS, LAYOUT,
   COLORS: Object.freeze({ PANEL, LINE, TEXT, LABEL, DIM, FOOT, BLUE, AMBER, RED }),
 };

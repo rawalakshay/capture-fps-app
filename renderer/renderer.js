@@ -195,6 +195,26 @@ function rememberSelect(id, key) {
 rememberSelect('opt-quality', 'quality');
 rememberSelect('opt-res', 'resolution');
 rememberSelect('opt-caption-pos', 'captionPosition');
+remember('opt-style', 'overlayStyle');
+
+// The long graph: remember the toggle and the opacity; the slider follows the toggle.
+try {
+  const on = localStorage.getItem('longGraph'), op = localStorage.getItem('longGraphOpacity');
+  if (on !== null) $('opt-long').checked = on === '1';
+  if (op !== null && Number.isFinite(Number(op))) $('opt-long-opacity').value = op;
+} catch (_) { /* keep the defaults */ }
+function syncLongGraph() {
+  const on = $('opt-long').checked;
+  $('opt-long-opacity').disabled = !on;
+  $('opt-long-opacity-val').textContent = `${$('opt-long-opacity').value}%`;
+  try {
+    localStorage.setItem('longGraph', on ? '1' : '0');
+    localStorage.setItem('longGraphOpacity', $('opt-long-opacity').value);
+  } catch (_) { /* ignore */ }
+}
+$('opt-long').addEventListener('change', syncLongGraph);
+$('opt-long-opacity').addEventListener('input', syncLongGraph);
+syncLongGraph();
 
 // Remember the watermark between sessions; the text field follows the toggle.
 try {
@@ -251,6 +271,9 @@ function renderOptions() {
     caption: $('opt-caption').value.trim() || null,
     captionPosition: $('opt-caption-pos').value,
     watermark: $('opt-watermark-on').checked ? $('opt-watermark').value.trim() : '',
+    style: radioValue('opt-style'),
+    longGraph: $('opt-long').checked,
+    longGraphOpacity: Number($('opt-long-opacity').value) / 100,
     encoder: radioValue('opt-enc'),
     quality: $('opt-quality').value,
     resolution: $('opt-res').value,

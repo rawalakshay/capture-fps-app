@@ -68,6 +68,17 @@
     </div>
     <div id="video-opts" class="block-inner">
     <fieldset class="seg-field">
+      <legend>Overlay look</legend>
+      <div class="seg">
+        <input type="radio" name="opt-style" id="style-panel" value="panel" checked>
+        <label for="style-panel"><span class="seg-title">Panel</span><span class="seg-sub">full panel</span></label>
+        <input type="radio" name="opt-style" id="style-strip" value="strip">
+        <label for="style-strip"><span class="seg-title">Strip</span><span class="seg-sub">top bar</span></label>
+        <input type="radio" name="opt-style" id="style-glass" value="glass">
+        <label for="style-glass"><span class="seg-title">Glass</span><span class="seg-sub">three tiles</span></label>
+      </div>
+    </fieldset>
+    <fieldset class="seg-field">
       <legend>Overlay position (top of the frame)</legend>
       <div class="seg">
         <input type="radio" name="opt-pos" id="pos-left" value="left">
@@ -100,6 +111,14 @@
         <option value="bottom-center">Bottom middle</option>
         <option value="bottom-right">Bottom right</option>
       </select>
+    </div>
+    <div class="check">
+      <input type="checkbox" id="opt-long">
+      <label for="opt-long">Long frame-time graph along the bottom</label>
+    </div>
+    <div class="field">
+      <label for="opt-long-opacity">Graph background opacity <span id="opt-long-opacity-val">86%</span></label>
+      <input id="opt-long-opacity" type="range" min="0" max="100" value="86" step="2">
     </div>
     <div class="check">
       <input type="checkbox" id="opt-watermark-on" checked>

@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { probe, runFfmpeg, seekArgs, spanArgs, gpuStatus } = require('./ffmpeg');
 const { measureDiffs, analyse, summarise, writeCsvs, perSecondFps } = require('./analysis');
-const { Overlay, assFilter } = require('./overlay');
+const { createOverlay, assFilter } = require('./overlay');
 
 const FONTS_DIR = path.join(__dirname, '..', '..', 'assets', 'fonts');
 
@@ -92,7 +92,8 @@ async function analyseVideo(opts, { onProgress = () => {}, signal } = {}) {
  * opts: { title?, position = 'right', encoder = 'gpu' | 'cpu',
  *         quality = 'standard', resolution = 'source' | '1080' | '1440' | '2160',
  *         overlayRate = 30, hwDecode?, showTarget = true, showFormat = true,
- *         caption?, captionPosition = 'top-left' }
+ *         caption?, captionPosition = 'top-left', watermark?,
+ *         style = 'panel' | 'strip' | 'glass', longGraph = false, longGraphOpacity = 0.86 }
  * onProgress({ phase: 'overlay'|'render', fraction })
  */
 async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = {}) {
@@ -107,7 +108,7 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
   // The overlay is laid out for the output size, so it stays sharp when the
   // video is scaled; its format pill names the recording, not the output.
   const title = opts.title || path.parse(video).name;
-  const ass = new Overlay(a, size, title, opts.overlayRate || 30, opts.position || 'right', info, opts).build();
+  const ass = createOverlay(a, size, title, opts.overlayRate || 30, opts.position || 'right', info, opts).build();
   fs.writeFileSync(path.join(outDir, 'overlay.ass'), ass, 'utf8');
   if (signal && signal.aborted) throw abortError();
 
