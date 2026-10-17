@@ -6,7 +6,7 @@
 //                           [--position left|center|right] [--encoder gpu|cpu]
 //                           [--quality high|standard|small] [--cpu-decode]
 //                           [--resolution source|1080|1440|2160]
-//                           [--no-target-pill] [--no-format-pill]
+//                           [--no-target-pill] [--no-format-pill] [--watermark T | --no-watermark]
 //                           [--caption T] [--caption-position top-left|top-center|top-right|bottom-left|bottom-center|bottom-right]
 
 const { runJob, QUALITY, ENCODERS, RESOLUTIONS } = require('./core/pipeline');
@@ -40,6 +40,8 @@ function parseArgs(argv) {
     else if (a === '--no-target-pill') o.showTarget = false;
     else if (a === '--no-format-pill') o.showFormat = false;
     else if (a === '--caption') o.caption = next();
+    else if (a === '--watermark') o.watermark = next();
+    else if (a === '--no-watermark') o.watermark = '';
     else if (a === '--caption-position') o.captionPosition = oneOf(next(), a, CAPTION_POSITIONS);
     else if (a === '--encoder') o.encoder = oneOf(next(), a, ENCODERS);
     else if (a === '--quality') o.quality = oneOf(next(), a, Object.keys(QUALITY));

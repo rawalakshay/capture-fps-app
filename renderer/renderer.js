@@ -196,6 +196,19 @@ rememberSelect('opt-quality', 'quality');
 rememberSelect('opt-res', 'resolution');
 rememberSelect('opt-caption-pos', 'captionPosition');
 
+// Remember the watermark between sessions; the text field follows the toggle.
+try {
+  const v = localStorage.getItem('watermark');
+  if (v !== null) { $('opt-watermark').value = v; $('opt-watermark-on').checked = v !== ''; }
+} catch (_) { /* keep the default */ }
+function syncWatermark() {
+  $('opt-watermark').disabled = !$('opt-watermark-on').checked;
+  try { localStorage.setItem('watermark', $('opt-watermark-on').checked ? $('opt-watermark').value.trim() : ''); } catch (_) { /* ignore */ }
+}
+$('opt-watermark-on').addEventListener('change', syncWatermark);
+$('opt-watermark').addEventListener('change', syncWatermark);
+syncWatermark();
+
 // ---------- running ----------
 
 function readOptions() {
@@ -237,6 +250,7 @@ function renderOptions() {
     showFormat: $('opt-format-pill').checked,
     caption: $('opt-caption').value.trim() || null,
     captionPosition: $('opt-caption-pos').value,
+    watermark: $('opt-watermark-on').checked ? $('opt-watermark').value.trim() : '',
     encoder: radioValue('opt-enc'),
     quality: $('opt-quality').value,
     resolution: $('opt-res').value,

@@ -167,6 +167,12 @@ test('header pills can be turned off and a caption placed on the video', () => {
   // At the top on the panel's side the caption drops below the panel.
   const under = parse(mk({ caption: 'x', captionPosition: 'top-left' })).find((e) => e.plain === 'x');
   assert.deepEqual(under.pos, [24, OY + LAYOUT.PH + 16]);
+  // The watermark owns the bottom left; a caption there sits above it.
+  const wm = parse(mk({ caption: 'x', captionPosition: 'bottom-left' }));
+  assert.deepEqual(wm.find((e) => e.plain === '4aLse Benchmarks').pos, [24, 1056]);
+  assert.deepEqual(wm.find((e) => e.plain === 'x').pos, [24, 1016]);
+  assert.ok(!mk({ watermark: '' }).includes('4aLse'));
+  assert.ok(mk({ watermark: 'Other' }).includes('}Other'));
 });
 
 test('pacing shows the share of frames by length', () => {

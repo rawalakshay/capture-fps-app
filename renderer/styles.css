@@ -91,6 +91,7 @@ input[type="text"], input[type="number"], select {
 }
 input[type="number"] { font-family: var(--mono); font-size: 14px; }
 input::placeholder { color: var(--faint); }
+input:disabled { opacity: 0.5; cursor: not-allowed; }
 input:hover, select:hover { border-color: #4B5560; }
 input.invalid { border-color: var(--red); }
 .hint-small { margin: 2px 0 0; font-size: 12px; line-height: 1.4; color: var(--faint); }

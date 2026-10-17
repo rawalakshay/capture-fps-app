@@ -24,6 +24,7 @@ const FT_SHOW = 89;                     // frame-time chart: 89 completed frames
 const MIN_FRAMES_LOW = 20;              // frames a window needs before a percentile is shown
 const STALL_LIVE_MS = 100, STALL_LIVE_FRAMES = 3; // the frame on screen counts as a stall after this
 const MAX_OVERFLOW_LABELS = 4;
+const WATERMARK = '4aLse Benchmarks';     // bottom left of every video; opts.watermark overrides, '' removes it
 
 // Layout in panel px: text baselines and box tops, as in the design.
 const LAYOUT = Object.freeze({
@@ -284,15 +285,22 @@ class Overlay {
 
   /** Free text on the video, 24 px in from a corner or edge, outlined so it reads on any footage.
    * At the top on the panel's side it sits below the panel instead. */
-  drawCaption(D, s, where) {
+  drawCaption(D, s, where, aboveWatermark = false) {
     const [v, h] = where.split('-');
     const frameW = this.w / this.k, margin = 24, size = 28;
     const an = { top: 7, bottom: 1 }[v] + { left: 0, center: 1, right: 2 }[h];
     const x = h === 'left' ? margin : h === 'center' ? frameW / 2 : frameW - margin;
     const underPanel = v === 'top' && h === this.position;
-    const y = v === 'bottom' ? 1080 - margin : underPanel ? this.oy + PH + 16 : margin;
+    const lift = aboveWatermark && h === 'left' ? 40 : 0; // bottom left is the watermark's spot
+    const y = v === 'bottom' ? 1080 - margin - lift : underPanel ? this.oy + PH + 16 : margin;
     this.emit(3, 0, D, `{\\an${an}\\pos(${f1(this.px(x))},${f1(this.px(y))})\\bord${f1(this.px(2))}\\3c${assColor(PANEL)}\\shad0}` +
       this.run(s, SANS_SEMI, size, TEXT, 0.04));
+  }
+
+  /** Watermark at the bottom left: smaller and dimmer than a caption, outlined, 80 % opaque. */
+  drawWatermark(D, s) {
+    this.emit(3, 0, D, `{\\an1\\pos(${f1(this.px(24))},${f1(this.px(1056))})\\bord${f1(this.px(1.5))}\\3c${assColor(PANEL)}` +
+      `\\1a&H33&\\3a&H33&\\shad0}` + this.run(s, SANS_SEMI, 22, LABEL, 0.04));
   }
 
   /** Value box at the top of the frame-time chart for a bar taller than the scale. */
@@ -433,7 +441,9 @@ class Overlay {
     // Title, cut to fit beside the pills.
     let title = cleanText(this.title).toUpperCase();
     const avail = IW - Math.max(0, pillsW - 6) - 8;
-    if (o.caption) this.drawCaption(D, cleanText(o.caption), CAPTION_POSITIONS.includes(o.captionPosition) ? o.captionPosition : 'top-left');
+    const wm = cleanText(o.watermark ?? WATERMARK);
+    if (wm) this.drawWatermark(D, wm);
+    if (o.caption) this.drawCaption(D, cleanText(o.caption), CAPTION_POSITIONS.includes(o.captionPosition) ? o.captionPosition : 'top-left', !!wm);
     if (sansW(title, 14, 0.08) > avail) {
       while (title.length > 1 && sansW(`${title}…`, 14, 0.08) > avail) title = title.slice(0, -1);
       title = `${title.trimEnd()}…`;

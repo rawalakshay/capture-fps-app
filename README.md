@@ -30,7 +30,10 @@ npm start
    right of the frame. The **TARGET** and capture format (**1080P60**) pills
    in the panel header can each be turned off. A **Caption** is free text
    (say, "Game Benchmark at 1440p") drawn in any corner or edge of the video;
-   at the top on the panel's side it sits just below the panel. **Encoder** picks GPU (NVENC, about 5x faster, NVIDIA
+   at the top on the panel's side it sits just below the panel. Every video
+   carries a small **Watermark** at the bottom left, "4aLse Benchmarks" by
+   default; untick it or change the text (a bottom-left caption sits above
+   it). The CLI has `--watermark` and `--no-watermark`. **Encoder** picks GPU (NVENC, about 5x faster, NVIDIA
    only) or CPU (x264, any PC); **Video quality** is High, Standard or Smaller
    files on either. **Output resolution** keeps the recording's size or
    scales the video to 1080p, 1440p or 4K; the overlay is drawn at the output
@@ -105,7 +108,7 @@ node src/cli.js run.mp4 [--no-video] [--start S] [--end S] [--target 30]
                         [--position left|center|right] [--encoder gpu|cpu]
                         [--quality high|standard|small] [--cpu-decode]
                         [--resolution source|1080|1440|2160]
-                        [--no-target-pill] [--no-format-pill]
+                        [--no-target-pill] [--no-format-pill] [--watermark T | --no-watermark]
                         [--caption T] [--caption-position top-left|top-center|top-right|
                                                           bottom-left|bottom-center|bottom-right]
 ```
