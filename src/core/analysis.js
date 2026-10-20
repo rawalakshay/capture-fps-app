@@ -1,10 +1,13 @@
 'use strict';
-// Frame detection and statistics: a port of capture_fps.py.
+// Frame detection and statistics: a port of capture_fps.py, plus the peak test.
 //
 // The console sends a fixed-refresh signal (e.g. 60 Hz). When the game
 // renders slower than the refresh, the same image is sent more than once.
 // Every captured refresh is compared with the one before it; a refresh that
-// changed is a new game frame, one that did not is a repeat.
+// changed is a new game frame, one that did not is a repeat. A refresh
+// counts as changed when the mean difference is above the threshold or when
+// any one spot changed strongly (the peak): a small real change in a calm
+// scene averages to almost nothing, encoder noise on a repeat never peaks.
 
 const fs = require('fs');
 const path = require('path');
@@ -13,6 +16,11 @@ const { runFfmpeg, seekArgs, spanArgs } = require('./ffmpeg');
 // A refresh counts as a new frame when the mean absolute luma difference to
 // the previous refresh (0..255, on a downscaled grey image) is above this.
 const DEFAULT_THRESHOLD = 0.4;
+// A refresh is also a new frame when any pixel of the downscaled diff (a 3x3
+// block at 1080p, 0..255) changed by at least this much. Encoder noise on a
+// repeat peaked at 20 in 120 Mbps NVENC recordings and 31 at x264 CRF 23;
+// real changes peaked at 87 or more.
+const PEAK_NEW = 64;
 // Frame caps a fixed 60 Hz signal can carry.
 const TARGETS = [20, 30, 60];
 // Frames on screen longer than this are listed for a human to check.
@@ -40,35 +48,51 @@ function round(x, n) {
 }
 
 /**
- * [time_s, diff_to_previous] for every captured refresh; the first one gets
- * diff = Infinity (always a new frame).
+ * [time_s, diff_to_previous, peak_diff] for every captured refresh; the first
+ * one gets diff = Infinity (always a new frame).
  */
 async function measureDiffs(video, work, { start, end, onProgress, signal, hwaccel = false } = {}) {
-  const name = `diff_raw_${process.pid}.txt`; // per process: two app windows may measure the same recording
-  const meta = path.join(work, name);
+  // per process: two app windows may measure the same recording
+  const names = [`diff_raw_${process.pid}.txt`, `diff_peak_${process.pid}.txt`];
   const vf = 'scale=640:-2:flags=area,format=gray,' +
     'tblend=all_mode=difference,signalstats,' +
-    `metadata=mode=print:key=lavfi.signalstats.YAVG:file=${name}`;
-  let text;
+    `metadata=mode=print:key=lavfi.signalstats.YAVG:file=${names[0]},` +
+    `metadata=mode=print:key=lavfi.signalstats.YMAX:file=${names[1]}`;
+  let texts;
   try {
     await runFfmpeg([
       '-y', ...(hwaccel ? ['-hwaccel', 'cuda'] : []), ...seekArgs(start), '-i', path.resolve(video),
       ...spanArgs(start, end),
       '-an', '-sn', '-dn', '-vf', vf, '-f', 'null', '-',
     ], { cwd: work, onProgress, signal });
-    text = fs.readFileSync(meta, 'utf8');
+    texts = names.map((n) => fs.readFileSync(path.join(work, n), 'utf8'));
   } finally {
-    fs.rmSync(meta, { force: true });
+    for (const n of names) fs.rmSync(path.join(work, n), { force: true });
   }
-  const rows = parseDiffs(text);
+  const rows = parseDiffs(...texts);
   if (rows.length < 3) throw new Error('Too few frames measured; is this a video file?');
   return rows;
 }
 
-/** Rows from the metadata filter's text: lines of `pts_time:` then `lavfi.signalstats.YAVG=`. */
-function parseDiffs(text) {
+/** Rows from the metadata filters' text: lines of `pts_time:` then `lavfi.signalstats.YAVG=`
+ * in text, and the same frames' `lavfi.signalstats.YMAX=` in peakText. */
+function parseDiffs(text, peakText = '') {
+  const { times, values: diffs } = parseMeta(text, 'YAVG');
+  const peaks = parseMeta(peakText, 'YMAX').values;
+  if (times.length < 2) return times.map((t, i) => [t, diffs[i], peaks[i]]);
+  // tblend emits one frame per pair, stamped with the later frame; put the
+  // very first refresh back in front of it.
+  const period = times[1] - times[0];
+  const first = times[0] - period;
+  const rows = [[0.0, Infinity]];
+  for (let i = 0; i < times.length; i++) rows.push([times[i] - first, diffs[i], peaks[i]]);
+  return rows;
+}
+
+function parseMeta(text, key) {
   const times = [];
-  const diffs = [];
+  const values = [];
+  const re = new RegExp(`lavfi[.]signalstats[.]${key}=([-0-9.e]+)`);
   let pendingT = null;
   for (const line of text.split(/\r?\n/)) {
     let m = /pts_time:([-0-9.e]+)/.exec(line);
@@ -76,21 +100,14 @@ function parseDiffs(text) {
       pendingT = parseFloat(m[1]);
       continue;
     }
-    m = /lavfi\.signalstats\.YAVG=([-0-9.e]+)/.exec(line);
+    m = re.exec(line);
     if (m && pendingT !== null) {
       times.push(pendingT);
-      diffs.push(parseFloat(m[1]));
+      values.push(parseFloat(m[1]));
       pendingT = null;
     }
   }
-  if (times.length < 2) return times.map((t, i) => [t, diffs[i]]);
-  // tblend emits one frame per pair, stamped with the later frame; put the
-  // very first refresh back in front of it.
-  const period = times[1] - times[0];
-  const first = times[0] - period;
-  const rows = [[0.0, Infinity]];
-  for (let i = 0; i < times.length; i++) rows.push([times[i] - first, diffs[i]]);
-  return rows;
+  return { times, values };
 }
 
 /**
@@ -148,6 +165,7 @@ function inferTarget(avgFps) {
 function analyse(rows, hz, threshold, target) {
   const pts = rows.map((r) => r[0]);
   const diffs = rows.map((r) => r[1]);
+  const peaks = rows.map((r) => r[2]);
   const period = hz > 0 ? 1.0 / hz : (pts[1] - pts[0]);
   // The signal is fixed-refresh, so refresh i is at exactly i x period.
   // Container timestamps are often rounded to 1 ms, which would blur every
@@ -155,7 +173,8 @@ function analyse(rows, hz, threshold, target) {
   const times = pts.map((_, i) => i * period);
   let dropped = 0;
   const droppedAt = []; // time (in the fixed-refresh base) of each refresh that follows a gap
-  for (let i = 1; i < pts.length; i++) {
+  // The recorder stamps its last frame when it stops, so a gap there is not a drop.
+  for (let i = 1; i < pts.length - 1; i++) {
     const gap = pts[i] - pts[i - 1];
     if (gap > 1.5 * period) {
       dropped += Math.max(0, Math.round(gap / period) - 1);
@@ -164,7 +183,7 @@ function analyse(rows, hz, threshold, target) {
   }
   const duration = times.length * period;
   const a = {
-    hz, droppedRefreshes: dropped, droppedAt, duration, times, diffs, newFrame: [],
+    hz, droppedRefreshes: dropped, droppedAt, duration, times, diffs, peaks, newFrame: [],
     starts: [], frameMs: [], threshold: DEFAULT_THRESHOLD,
     thresholdSource: 'default', target: 60,
   };
@@ -178,7 +197,7 @@ function analyse(rows, hz, threshold, target) {
       a.thresholdSource = 'auto (two clear groups)';
     }
   }
-  a.newFrame = diffs.map((d) => d > a.threshold);
+  a.newFrame = diffs.map((d, i) => d > a.threshold || peaks[i] >= PEAK_NEW);
   a.starts = times.filter((_, i) => a.newFrame[i]);
   for (let i = 0; i < a.starts.length; i++) {
     const end = i + 1 < a.starts.length ? a.starts[i + 1] : duration;
@@ -245,10 +264,10 @@ function summarise(a, info) {
 }
 
 function writeCsvs(a, out) {
-  const r = ['refresh,time_s,diff,new_frame'];
+  const r = ['refresh,time_s,diff,peak,new_frame'];
   a.times.forEach((t, i) => {
-    const d = a.diffs[i];
-    r.push(`${i},${t.toFixed(4)},${Number.isFinite(d) ? d.toFixed(4) : ''},${a.newFrame[i] ? 1 : 0}`);
+    const d = a.diffs[i], p = a.peaks[i];
+    r.push(`${i},${t.toFixed(4)},${Number.isFinite(d) ? d.toFixed(4) : ''},${Number.isFinite(p) ? p : ''},${a.newFrame[i] ? 1 : 0}`);
   });
   fs.writeFileSync(path.join(out, 'refreshes.csv'), r.join('\r\n') + '\r\n');
   const f = ['frame,start_s,frame_time_ms'];
@@ -260,7 +279,7 @@ function writeCsvs(a, out) {
 }
 
 module.exports = {
-  DEFAULT_THRESHOLD, TARGETS, STALL_MS,
+  DEFAULT_THRESHOLD, PEAK_NEW, TARGETS, STALL_MS,
   bisectLeft, bisectRight, measureDiffs, parseDiffs, otsuThreshold, percentile,
   inferTarget, analyse, perSecondFps, summarise, writeCsvs,
 };

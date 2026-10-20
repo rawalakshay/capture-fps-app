@@ -16,11 +16,22 @@ test('parseDiffs reads the metadata filter output and restores the first refresh
     'lavfi.signalstats.YAVG=0.02',
     '',
   ].join('\n');
-  const rows = parseDiffs(text);
+  const peakText = [
+    'frame:0    pts:1001    pts_time:0.016683',
+    'lavfi.signalstats.YMAX=3',
+    'frame:1    pts:2002    pts_time:0.033367',
+    'lavfi.signalstats.YMAX=201',
+    'frame:2    pts:3003    pts_time:0.05005',
+    'lavfi.signalstats.YMAX=5',
+    '',
+  ].join('\n');
+  const rows = parseDiffs(text, peakText);
   assert.equal(rows.length, 4);
   assert.deepEqual(rows[0], [0, Infinity]);
-  assert.ok(Math.abs(rows[1][0] - 0.016684) < 1e-6 && rows[1][1] === 0.012345);
-  assert.ok(Math.abs(rows[3][0] - 0.050051) < 1e-6 && rows[3][1] === 0.02);
+  assert.ok(Math.abs(rows[1][0] - 0.016684) < 1e-6 && rows[1][1] === 0.012345 && rows[1][2] === 3);
+  assert.ok(Math.abs(rows[3][0] - 0.050051) < 1e-6 && rows[3][1] === 0.02 && rows[3][2] === 5);
+  assert.equal(rows[2][2], 201);
+  assert.equal(parseDiffs(text)[2][2], undefined, 'no peak text, no peaks');
   assert.equal(parseDiffs('frame:0 pts:0 pts_time:0\nlavfi.signalstats.YAVG=1\n').length, 1, 'one frame cannot be shifted');
   assert.equal(parseDiffs('').length, 0);
 });
@@ -37,4 +48,26 @@ test('a game locked at 30 fps summarises as 30 fps with nothing missed', () => {
   assert.equal(s.frames_missing_target, 0);
   assert.equal(s.capture.dropped_by_recorder, 0);
   assert.equal(s.threshold_source, 'auto (two clear groups)');
+});
+
+test('a small change with a strong peak is a new frame; faint even noise is not', () => {
+  // 60 fps, but every 4th refresh barely changes on average: a sharp local change (peak 150) or encoder noise (peak 20).
+  const rows = [];
+  for (let i = 0; i < 600; i++) {
+    const quiet = i % 4 === 3;
+    rows.push([i / 60, i === 0 ? Infinity : quiet ? 0.05 : 10, quiet ? (i % 8 === 3 ? 150 : 20) : 200]);
+  }
+  const a = analyse(rows, 60, 0.4, 60);
+  assert.equal(a.newFrame[3], true);
+  assert.equal(a.newFrame[7], false);
+  assert.equal(a.newFrame.filter(Boolean).length, 450 + 75);
+});
+
+test("a gap before the recorder's last frame is not a drop", () => {
+  const rows = [];
+  for (let i = 0; i < 120; i++) rows.push([i / 60, i === 0 ? Infinity : 10]);
+  rows[119][0] = 120 / 60; // OBS stamps the final frame one slot late when it stops
+  assert.equal(analyse(rows, 60, 0.4, 60).droppedRefreshes, 0);
+  for (let i = 60; i < 120; i++) rows[i][0] += 2 / 60; // a real 2-refresh drop mid-clip
+  assert.equal(analyse(rows, 60, 0.4, 60).droppedRefreshes, 2);
 });

@@ -1,9 +1,10 @@
 # Capture FPS
 
-A small desktop app for `capture_fps.py`: measure a console game's frame rate
-from a capture-card recording and burn an FPS overlay into the video. Same
-measurement method and numbers as the Python script, rewritten in JavaScript,
-so Python is not needed; the overlay is the app's own design (see Overlay).
+A small desktop app that grew out of `capture_fps.py`: measure a console
+game's frame rate from a capture-card recording and burn an FPS overlay into
+the video. The measurement is the Python script's, rewritten in JavaScript so
+Python is not needed, plus a peak test (see Measurement); the overlay is the
+app's own design (see Overlay).
 
 ## Install
 
@@ -83,6 +84,20 @@ Unsigned builds work but Windows SmartScreen warns on first run.
    opens the rendered file. The ⋯ menu has **Copy summary** (the key numbers
    as text), **Show files** and **Refresh preview**. Clips over 30 minutes
    get a note that the overlay file will be large and the render slow.
+
+## Measurement
+
+Every captured refresh is compared with the one before it on a 640-pixel-wide
+grey copy. A refresh is a new game frame when the mean difference is above
+the threshold (Otsu's split of the two groups, or the value set by hand), or
+when any one spot of the picture changed by 64 levels or more out of 255. The
+peak test catches calm scenes: a character moving against a still background
+averages to almost nothing, while a truly repeated frame only carries faint,
+evenly spread encoder noise, which never peaks. Record at high quality (NVENC
+CQP 20 or better, x264 CRF 18 or better): at x264 CRF 23 a repeat re-encoded
+at a keyframe can read as a new frame. A screen that does not change at all,
+such as a pause menu or a fade, cannot be measured from a recording; frames
+the game presented without changing a pixel appear as one long frame.
 
 ## Overlay
 
