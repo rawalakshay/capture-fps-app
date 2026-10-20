@@ -3,8 +3,8 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { toolStatus, gpuStatus, probe } = require('./src/core/ffmpeg');
-const { analyseVideo, renderOverlay, publicResult, defaultOutDir } = require('./src/core/pipeline');
+const { toolStatus, gpuStatus, vulkanStatus, probe } = require('./src/core/ffmpeg');
+const { analyseVideo, renderOverlay, previewFrame, publicResult, defaultOutDir } = require('./src/core/pipeline');
 
 let win = null;
 let job = null;          // { controller } while a job runs
@@ -67,20 +67,21 @@ async function tryRender(an, opts, signal) {
   try {
     return await renderOverlay(an, opts, { signal, onProgress: sendProgress });
   } catch (e) {
-    return e.name === 'AbortError' ? { error: 'Rendering was cancelled.' } : { error: e.message };
+    return e.name === 'AbortError' ? { error: 'Rendering was cancelled.', cancelled: true } : { error: e.message };
   }
 }
 
 ipcMain.handle('tools', () => toolStatus());
 ipcMain.handle('gpu', () => gpuStatus());
+ipcMain.handle('vulkan', () => vulkanStatus());
 
 ipcMain.handle('pick-video', async () => {
   const r = await dialog.showOpenDialog(win, {
-    title: 'Choose a capture recording',
-    properties: ['openFile'],
+    title: 'Choose capture recordings',
+    properties: ['openFile', 'multiSelections'],
     filters: [{ name: 'Video', extensions: VIDEO_EXT }, { name: 'All files', extensions: ['*'] }],
   });
-  return r.canceled ? null : r.filePaths[0];
+  return r.canceled ? [] : r.filePaths;
 });
 
 ipcMain.handle('pick-folder', async (_e, current) => {
@@ -117,6 +118,13 @@ ipcMain.handle('render-only', (_e, opts) => asJob(async (signal) => {
   if (!lastAnalysis) return { ok: false, error: 'Analyse a recording first.' };
   const render = await tryRender(lastAnalysis, opts, signal);
   return { ok: true, result: publicResult(lastAnalysis, render) };
+}));
+
+// One frame of the last analysis with the overlay as the current settings would draw it.
+ipcMain.handle('preview', (_e, opts, at) => asJob(async (signal) => {
+  if (!lastAnalysis) return { ok: false, error: 'Analyse a recording first.' };
+  const r = await previewFrame(lastAnalysis, opts, at, { signal });
+  return { ok: true, at: r.at, jpeg: fs.readFileSync(r.path).toString('base64') };
 }));
 
 ipcMain.handle('cancel-job', () => {

@@ -186,6 +186,13 @@ test('writeTo streams the same bytes build returns', () => {
   const file = path.join(dir, 'overlay.ass');
   new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE).writeTo(file);
   assert.equal(fs.readFileSync(file, 'utf8'), new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE).build());
+  // A preview moment: only the events live at that time, all moved to the first second.
+  new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE).writeTo(file, { at: 6.01 });
+  const one = parse(fs.readFileSync(file, 'utf8'));
+  const all = parse(new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE).build());
+  assert.equal(one.length, active(all, 6.01).length);
+  assert.ok(one.length > 20 && one.every((e) => e.start === 0 && e.end === 1));
+  assert.equal(textAt(one, 0.5, LAYOUT.PAD, LAYOUT.HERO_BASE, 72), '60');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -207,6 +214,9 @@ test('the strip and glass looks build cleanly and show the hero', () => {
     assert.ok(box.text.includes(`\\c${assColor(COLORS.PANEL)}`) && box.text.includes('\\3c&H00FFFFFF') && box.text.includes('\\3a&HEB&'), `${style}: box colours`);
     assert.ok(events.length <= 350 * a.duration + 100, `${style}: ${events.length} events`);
   }
+  const none = createOverlay(a, SIZE, 'Test clip', 30, 'right', SIZE, { style: 'none', caption: 'Cap' }).build();
+  assert.ok(none.includes('4aLse') && none.includes('}Cap') && !/TARGET|TEST CLIP|FPS/.test(none), 'none: extras only');
+  assert.ok(parse(none).length < 10, 'none: no per-frame events');
   for (const style of ['nope', 'constructor', '__proto__']) {
     assert.equal(createOverlay(a, SIZE, 'x', 30, 'right', SIZE, { style }).constructor, Overlay, `${style} falls back to the panel`);
   }

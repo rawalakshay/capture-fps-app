@@ -5,12 +5,12 @@
 //                           [--threshold X] [--title T] [--out DIR]
 //                           [--position left|center|right] [--encoder gpu|cpu]
 //                           [--quality high|standard|small] [--cpu-decode]
-//                           [--resolution source|1080|1440|2160]
+//                           [--resolution source|1080|1440|2160] [--upscaler lanczos|sharp|fsrcnnx]
 //                           [--no-target-pill] [--no-format-pill] [--watermark T | --no-watermark]
 //                           [--caption T] [--caption-position top-left|top-center|top-right|bottom-left|bottom-center|bottom-right]
-//                           [--style panel|strip|glass] [--long-graph] [--long-graph-opacity 0.86]
+//                           [--style panel|strip|glass|none] [--long-graph] [--long-graph-opacity 0.86]
 
-const { runJob, QUALITY, ENCODERS, RESOLUTIONS } = require('./core/pipeline');
+const { runJob, QUALITY, ENCODERS, RESOLUTIONS, UPSCALERS } = require('./core/pipeline');
 const { TARGETS, STALL_MS } = require('./core/analysis');
 const { POSITIONS, CAPTION_POSITIONS, STYLES } = require('./core/overlay');
 const { gpuStatus } = require('./core/ffmpeg');
@@ -51,6 +51,7 @@ function parseArgs(argv) {
     else if (a === '--quality') o.quality = oneOf(next(), a, Object.keys(QUALITY));
     else if (a === '--cpu-decode') o.hwDecode = false;
     else if (a === '--resolution') o.resolution = oneOf(next(), a, Object.keys(RESOLUTIONS));
+    else if (a === '--upscaler') o.upscaler = oneOf(next(), a, UPSCALERS);
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`);
     else o.video = a;
   }

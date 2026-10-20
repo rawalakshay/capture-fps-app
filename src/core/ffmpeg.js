@@ -5,9 +5,15 @@ const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+// The bundled ffmpeg: resources/ffmpeg in the installed app, vendor/ffmpeg in a checkout.
+const BUNDLED = [
+  process.resourcesPath ? path.join(process.resourcesPath, 'ffmpeg') : null,
+  path.join(__dirname, '..', '..', 'vendor', 'ffmpeg'),
+].filter(Boolean);
+
 function which(tool) {
   const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
-  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+  for (const dir of BUNDLED.concat((process.env.PATH || '').split(path.delimiter))) {
     if (!dir) continue;
     for (const ext of exts) {
       const p = path.join(dir.replace(/^"|"$/g, ''), tool + ext);
@@ -22,8 +28,8 @@ function which(tool) {
 function need(tool) {
   const p = which(tool);
   if (!p) {
-    throw new Error(`${tool} not found on PATH. Install ffmpeg (for example ` +
-      `"winget install Gyan.FFmpeg") and restart the app.`);
+    throw new Error(`${tool} not found. Run "npm run fetch-ffmpeg", or install ffmpeg ` +
+      `(for example "winget install Gyan.FFmpeg") and restart the app.`);
   }
   return p;
 }
@@ -37,8 +43,8 @@ function toolStatus() {
       const ffmpeg = which('ffmpeg');
       const ffprobe = which('ffprobe');
       const done = (reason) => resolve({ ffmpeg, ffprobe, ok: !reason, reason: reason || null });
-      if (!ffmpeg) return done('ffmpeg not found on PATH');
-      if (!ffprobe) return done('ffprobe not found on PATH');
+      if (!ffmpeg) return done('ffmpeg not found');
+      if (!ffprobe) return done('ffprobe not found');
       execFile(ffmpeg, ['-hide_banner', '-filters'], { windowsHide: true, timeout: 20000, maxBuffer: 1 << 20 }, (err, stdout) => {
         done(!err && /^\s*\S*\s+ass\s/m.test(stdout) ? null
           : 'ffmpeg has no subtitle support (libass). Install the Gyan.FFmpeg build.');
@@ -104,6 +110,24 @@ function gpuStatus() {
   return gpuCache;
 }
 
+let vulkanCache = null;
+
+/** Whether GPU upscaling works here (a Vulkan device and ffmpeg's libplacebo filter), checked once. */
+function vulkanStatus() {
+  if (!vulkanCache) {
+    vulkanCache = new Promise((resolve) => {
+      const ff = which('ffmpeg');
+      if (!ff) return resolve({ ok: false, reason: 'ffmpeg not found' });
+      execFile(ff, ['-hide_banner', '-loglevel', 'error', '-init_hw_device', 'vulkan', '-f', 'lavfi', '-i', 'color=c=gray:s=64x64:r=30',
+        '-frames:v', '2', '-vf', 'libplacebo=w=128:h=128:format=yuv420p', '-f', 'null', '-'],
+      { windowsHide: true, timeout: 20000 }, (err, _out, stderr) => {
+        resolve(err ? { ok: false, reason: (stderr || err.message).trim().split(/\r?\n/).pop() } : { ok: true, reason: null });
+      });
+    });
+  }
+  return vulkanCache;
+}
+
 /**
  * Run ffmpeg with machine-readable progress. Resolves when it exits 0.
  * onProgress(seconds_done) is called as it goes; signal aborts it.
@@ -156,4 +180,4 @@ function spanArgs(start, end) {
   return end ? ['-t', (end - (start || 0)).toFixed(3)] : [];
 }
 
-module.exports = { which, need, toolStatus, gpuStatus, probe, runFfmpeg, seekArgs, spanArgs, abortError };
+module.exports = { which, need, toolStatus, gpuStatus, vulkanStatus, probe, runFfmpeg, seekArgs, spanArgs, abortError };

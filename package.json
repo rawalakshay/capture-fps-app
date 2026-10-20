@@ -8,9 +8,20 @@
   "scripts": {
     "start": "electron .",
     "cli": "node src/cli.js",
-    "test": "node --test"
+    "test": "node --test",
+    "fetch-ffmpeg": "node scripts/fetch-ffmpeg.js",
+    "dist": "npm run fetch-ffmpeg && electron-builder --win"
   },
   "devDependencies": {
-    "electron": "43.7.7"
+    "electron": "43.7.7",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.4alse.capturefps",
+    "productName": "Capture FPS",
+    "files": ["main.js", "preload.js", "renderer/**", "src/**", "assets/**"],
+    "extraResources": [{ "from": "vendor/ffmpeg", "to": "ffmpeg" }],
+    "win": { "target": "nsis" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
   }
 }

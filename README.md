@@ -5,50 +5,84 @@ from a capture-card recording and burn an FPS overlay into the video. Same
 measurement method and numbers as the Python script, rewritten in JavaScript,
 so Python is not needed; the overlay is the app's own design (see Overlay).
 
-## Requirements
+## Install
 
-- Windows with Node.js 18 or newer (for the first install only).
-- ffmpeg and ffprobe on PATH, built with libass:
-  `winget install Gyan.FFmpeg`, then restart the app.
+Run `Capture FPS Setup <version>.exe` from the release. It carries its own
+ffmpeg (the Gyan "full" build, GPL, with libass and libplacebo), so nothing
+else is needed. Windows 10 or 11, 64-bit.
 
-## Start
+## Run from source
 
-Double-click `Capture FPS.cmd`. The first run installs Electron (about
-100 MB, once). Or, from this folder:
+- Node.js 18 or newer.
+- `npm install`, then `npm run fetch-ffmpeg` once (downloads the bundled
+  ffmpeg into `vendor/ffmpeg`), or have ffmpeg and ffprobe built with libass on
+  PATH (`winget install Gyan.FFmpeg`).
+- `npm start`, or double-click `Capture FPS.cmd` (installs Electron on the
+  first run).
+
+## Build the installer
 
 ```
-npm install
-npm start
+npm run dist
 ```
+
+Fetches ffmpeg if needed (a pinned version, checked against its SHA-256 in
+`scripts/fetch-ffmpeg.js`; to move to a newer ffmpeg, change the version there,
+run the script once to see the new hash, and pin it) and writes
+`dist/Capture FPS Setup <version>.exe`
+(NSIS, per-user or per-machine, with a choice of folder). To sign it, set
+`CSC_LINK` to the `.pfx` file (or its base64) and `CSC_KEY_PASSWORD` to its
+password before running; electron-builder signs the exe and the installer.
+Unsigned builds work but Windows SmartScreen warns on first run.
 
 ## Use
 
-1. Choose a recording, or drop it on the window.
-2. Optionally set a title, a start and end time, the target (20/30/60 fps)
-   or a threshold. Leave target and threshold on Auto unless the results
-   look wrong. **Overlay look** picks the Panel (the full instrument panel,
-   the default), the Strip (one bar along the top edge) or Glass (three
-   tiles). **Overlay position** puts it at the top left, middle or right of
-   the frame. **Long frame-time graph** adds a scrolling 7.5 s frame-time
+1. Choose one or more recordings, or drop them on the window. Several are
+   analysed one after another with the same options; the results page then
+   has a row of buttons to switch between them.
+2. The options sit in four sections, one open at a time; a closed section
+   shows its current values. **Recording** has the file, a start and end
+   time, and the output folder. **Analysis** has the target (20/30/60 fps)
+   and the threshold; leave both on Auto unless the results look wrong.
+   **Overlay** and **Export** hold everything below. The **Preset** box at
+   the top saves every option under a name (the ⋯ menu beside it) and brings
+   it back with one pick. **Overlay look** picks the Panel (the full instrument panel,
+   the default), the Strip (one bar along the top edge), Glass (three
+   tiles) or None (no FPS overlay at all: the video is only upscaled and gets
+   the watermark, caption and long graph if set). **Position** puts it at the top left, middle or right of
+   the frame. **Frame-time graph** adds a scrolling 7.5 s frame-time
    strip across 70 % of the bottom edge, with its own background opacity. The **TARGET** and capture format (**1080P60**) pills
    in the panel header can each be turned off. A **Caption** is free text
    (say, "Game Benchmark at 1440p") drawn in any corner or edge of the video;
    at the top on the panel's side it sits just below the panel. Every video
    carries a small **Watermark** at the bottom left, "4aLse Benchmarks" by
-   default; untick it or change the text (a bottom-left caption sits above
+   default; switch it off or change the text (a bottom-left caption sits above
    it). The CLI has `--watermark` and `--no-watermark`. **Encoder** picks GPU (NVENC, about 5x faster, NVIDIA
-   only) or CPU (x264, any PC); **Video quality** is High, Standard or Smaller
-   files on either. **Output resolution** keeps the recording's size or
+   only) or CPU (x264, any PC); **Quality** is High, Standard or Smaller
+   files on either. **Size** keeps the recording's size or
    scales the video to 1080p, 1440p or 4K; the overlay is drawn at the output
-   size, so it stays sharp. The app remembers these choices.
-3. Press **Analyse**. Measuring decodes the whole recording; rendering the
-   overlay video re-encodes it. Untick **Render overlay video** for numbers
-   only.
-4. Results show average, 1% and 0.1% lows, the per-second FPS chart and every
-   frame of 200 ms or more to check (a stall, or a still shot such as a
-   cutscene hold). **Play overlay video** opens the rendered file.
-   **Render again** makes the video again with the overlay, encoder and
-   quality now set on the left, without measuring again.
+   size, so it stays sharp. **Upscaler** (shown only when the output is bigger) picks how the picture is enlarged:
+   Lanczos (the default, as before), Lanczos + sharpen (a light
+   contrast-adaptive sharpen, no extra cost), or FSRCNNX on the GPU (a small
+   neural-network shader run through libplacebo over Vulkan; sharper edges and
+   textures, needs a GPU with Vulkan; the shader is igv's FSRCNNX, LGPL-3.0,
+   in `assets/shaders`). None adds real detail the recording does not have.
+   The app remembers these choices.
+3. Press **Analyse** (or Ctrl+Enter). Measuring decodes the whole recording;
+   rendering the video re-encodes it. Switch off **Also render the video**
+   for numbers only. The line under the button says roughly how long it will take.
+4. Results open with a live preview: one frame with the overlay as the
+   options on the left would draw it. It redraws about a second after any
+   overlay or export option changes; click a second on the chart to move the
+   moment. Below it are the average, 1% and 0.1% lows, the longest frame,
+   the per-second FPS chart and, under **Details**, every frame of 200 ms or
+   more to check (a stall, or a still shot such as a cutscene hold) and the
+   measurement numbers. Drag across the chart to set the range, then press
+   Analyse to measure only that part. **Render video** makes the video with
+   the options now set on the left, without measuring again; **Play video**
+   opens the rendered file. The ⋯ menu has **Copy summary** (the key numbers
+   as text), **Show files** and **Refresh preview**. Clips over 30 minutes
+   get a note that the overlay file will be large and the render slow.
 
 ## Overlay
 
@@ -110,11 +144,11 @@ node src/cli.js run.mp4 [--no-video] [--start S] [--end S] [--target 30]
                         [--threshold X] [--title T] [--out DIR]
                         [--position left|center|right] [--encoder gpu|cpu]
                         [--quality high|standard|small] [--cpu-decode]
-                        [--resolution source|1080|1440|2160]
+                        [--resolution source|1080|1440|2160] [--upscaler lanczos|sharp|fsrcnnx]
                         [--no-target-pill] [--no-format-pill] [--watermark T | --no-watermark]
                         [--caption T] [--caption-position top-left|top-center|top-right|
                                                           bottom-left|bottom-center|bottom-right]
-                        [--style panel|strip|glass] [--long-graph] [--long-graph-opacity 0.86]
+                        [--style panel|strip|glass|none] [--long-graph] [--long-graph-opacity 0.86]
 ```
 
 ## Layout

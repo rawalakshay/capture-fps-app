@@ -9,7 +9,7 @@
 <body>
 <div class="app">
 
-<aside class="side">
+<aside class="side" id="side">
   <header class="brand">
     <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
       <rect x="4" y="16" width="5" height="12" rx="1"></rect>
@@ -23,156 +23,196 @@
     </div>
   </header>
 
-  <section class="block">
-    <h2 class="label">Recording</h2>
-    <button type="button" id="pick" class="file-btn">
-      <span id="file-name" class="file-name">Choose a video…</span>
-      <span id="file-meta" class="file-meta">or drop it on the window</span>
-    </button>
-  </section>
+  <div class="preset-row">
+    <select id="preset" aria-label="Preset"><option value="">No preset</option></select>
+    <details class="menu">
+      <summary class="btn-icon" aria-label="Preset actions" title="Save or delete a preset">⋯</summary>
+      <div class="menu-list">
+        <button type="button" id="preset-save">Save options as…</button>
+        <button type="button" id="preset-delete" disabled>Delete preset</button>
+      </div>
+    </details>
+  </div>
+  <div class="preset-row" id="preset-name-row" hidden>
+    <input id="preset-name" type="text" placeholder="Preset name" autocomplete="off" maxlength="40">
+    <button type="button" id="preset-ok" class="btn-small">Save</button>
+    <button type="button" id="preset-cancel" class="btn-small">Cancel</button>
+  </div>
 
-  <section class="block">
-    <h2 class="label">Options</h2>
-    <div class="field">
-      <label for="opt-title">Overlay title</label>
-      <input id="opt-title" type="text" placeholder="File name" autocomplete="off">
-    </div>
-    <div class="pair">
-      <div class="field">
-        <label for="opt-start">Start (s)</label>
-        <input id="opt-start" type="number" min="0" step="0.1" placeholder="0">
+  <div class="sections" id="sections">
+    <details class="sec" id="sec-recording">
+      <summary><span>Recording</span><span class="sum" id="sum-recording">no file yet</span></summary>
+      <div class="sec-body">
+        <button type="button" id="pick" class="file-btn">
+          <span id="file-name" class="file-name">Choose videos…</span>
+          <span id="file-meta" class="file-meta">or drop them on the window</span>
+        </button>
+        <div class="row">
+          <label for="opt-start">Range</label>
+          <div class="pair">
+            <input id="opt-start" type="number" min="0" step="0.1" placeholder="Start s" aria-label="Start (s)">
+            <input id="opt-end" type="number" min="0" step="0.1" placeholder="End s" aria-label="End (s)">
+          </div>
+        </div>
+        <div class="row">
+          <label for="out-change">Output</label>
+          <div class="out-row">
+            <span id="out-path" class="out-path">Next to the video</span>
+            <button type="button" id="out-change" class="btn-small" disabled>Change</button>
+          </div>
+        </div>
       </div>
-      <div class="field">
-        <label for="opt-end">End (s)</label>
-        <input id="opt-end" type="number" min="0" step="0.1" placeholder="End">
-      </div>
-    </div>
-    <div class="pair">
-      <div class="field">
-        <label for="opt-target">Target</label>
-        <select id="opt-target">
-          <option value="">Auto</option>
-          <option value="20">20 fps</option>
-          <option value="30">30 fps</option>
-          <option value="60">60 fps</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="opt-threshold">Threshold</label>
-        <input id="opt-threshold" type="number" min="0" step="0.01" placeholder="Auto">
-      </div>
-    </div>
-    <div class="check">
-      <input type="checkbox" id="opt-render" checked>
-      <label for="opt-render">Render overlay video</label>
-    </div>
-    <div id="video-opts" class="block-inner">
-    <fieldset class="seg-field">
-      <legend>Overlay look</legend>
-      <div class="seg">
-        <input type="radio" name="opt-style" id="style-panel" value="panel" checked>
-        <label for="style-panel"><span class="seg-title">Panel</span><span class="seg-sub">full panel</span></label>
-        <input type="radio" name="opt-style" id="style-strip" value="strip">
-        <label for="style-strip"><span class="seg-title">Strip</span><span class="seg-sub">top bar</span></label>
-        <input type="radio" name="opt-style" id="style-glass" value="glass">
-        <label for="style-glass"><span class="seg-title">Glass</span><span class="seg-sub">three tiles</span></label>
-      </div>
-    </fieldset>
-    <fieldset class="seg-field">
-      <legend>Overlay position (top of the frame)</legend>
-      <div class="seg">
-        <input type="radio" name="opt-pos" id="pos-left" value="left">
-        <label for="pos-left"><svg class="pos-icon" viewBox="0 0 32 18" aria-hidden="true"><rect class="pos-frame" x="0.75" y="0.75" width="30.5" height="16.5" rx="2"></rect><rect class="pos-panel" x="2.5" y="2.5" width="8" height="6" rx="1"></rect></svg>Left</label>
-        <input type="radio" name="opt-pos" id="pos-center" value="center">
-        <label for="pos-center"><svg class="pos-icon" viewBox="0 0 32 18" aria-hidden="true"><rect class="pos-frame" x="0.75" y="0.75" width="30.5" height="16.5" rx="2"></rect><rect class="pos-panel" x="12" y="2.5" width="8" height="6" rx="1"></rect></svg>Middle</label>
-        <input type="radio" name="opt-pos" id="pos-right" value="right" checked>
-        <label for="pos-right"><svg class="pos-icon" viewBox="0 0 32 18" aria-hidden="true"><rect class="pos-frame" x="0.75" y="0.75" width="30.5" height="16.5" rx="2"></rect><rect class="pos-panel" x="21.5" y="2.5" width="8" height="6" rx="1"></rect></svg>Right</label>
-      </div>
-    </fieldset>
-    <div class="check">
-      <input type="checkbox" id="opt-target-pill" checked>
-      <label for="opt-target-pill">Show TARGET pill (e.g. TARGET 60)</label>
-    </div>
-    <div class="check">
-      <input type="checkbox" id="opt-format-pill" checked>
-      <label for="opt-format-pill">Show capture pill (e.g. 1080P60)</label>
-    </div>
-    <div class="field">
-      <label for="opt-caption">Caption on the video</label>
-      <input id="opt-caption" type="text" placeholder="e.g. Game Benchmark at 1440p" autocomplete="off">
-    </div>
-    <div class="field">
-      <label for="opt-caption-pos">Caption position</label>
-      <select id="opt-caption-pos">
-        <option value="top-left" selected>Top left</option>
-        <option value="top-center">Top middle</option>
-        <option value="top-right">Top right</option>
-        <option value="bottom-left">Bottom left</option>
-        <option value="bottom-center">Bottom middle</option>
-        <option value="bottom-right">Bottom right</option>
-      </select>
-    </div>
-    <div class="check">
-      <input type="checkbox" id="opt-long">
-      <label for="opt-long">Long frame-time graph along the bottom</label>
-    </div>
-    <div class="field">
-      <label for="opt-long-opacity">Graph background opacity <span id="opt-long-opacity-val">86%</span></label>
-      <input id="opt-long-opacity" type="range" min="0" max="100" value="86" step="2">
-    </div>
-    <div class="check">
-      <input type="checkbox" id="opt-watermark-on" checked>
-      <label for="opt-watermark-on">Watermark at the bottom left</label>
-    </div>
-    <div class="field">
-      <label for="opt-watermark">Watermark text</label>
-      <input id="opt-watermark" type="text" value="4aLse Benchmarks" autocomplete="off">
-    </div>
-    <fieldset class="seg-field">
-      <legend>Encoder</legend>
-      <div class="seg seg-2">
-        <input type="radio" name="opt-enc" id="enc-gpu" value="gpu">
-        <label for="enc-gpu"><span class="seg-title">GPU (NVENC)</span><span class="seg-sub" id="enc-gpu-sub">Checking…</span></label>
-        <input type="radio" name="opt-enc" id="enc-cpu" value="cpu" checked>
-        <label for="enc-cpu"><span class="seg-title">CPU (x264)</span><span class="seg-sub">Works on any PC</span></label>
-      </div>
-    </fieldset>
-    <div class="field">
-      <label for="opt-res">Output resolution</label>
-      <select id="opt-res" aria-describedby="res-hint">
-        <option value="source" selected>Same as recording</option>
-        <option value="1080">1080p</option>
-        <option value="1440">1440p</option>
-        <option value="2160">4K (2160p)</option>
-      </select>
-      <p id="res-hint" class="hint-small">Upscaling adds no detail, but YouTube gives 1440p and 4K uploads a higher bitrate. 4K takes about three times as long to render.</p>
-    </div>
-    <div class="field">
-      <label for="opt-quality">Video quality</label>
-      <select id="opt-quality">
-        <option value="high">High (larger files)</option>
-        <option value="standard" selected>Standard</option>
-        <option value="small">Smaller files</option>
-      </select>
-    </div>
-    </div>
-  </section>
+    </details>
 
-  <section class="block">
-    <h2 class="label">Output folder</h2>
-    <div class="out-row">
-      <span id="out-path" class="out-path">Next to the video</span>
-      <button type="button" id="out-change" class="btn-small" disabled>Change</button>
+    <details class="sec" id="sec-analysis">
+      <summary><span>Analysis</span><span class="sum" id="sum-analysis">target auto · threshold auto</span></summary>
+      <div class="sec-body">
+        <div class="row">
+          <label for="opt-target">Target</label>
+          <select id="opt-target">
+            <option value="">Auto</option>
+            <option value="20">20 fps</option>
+            <option value="30">30 fps</option>
+            <option value="60">60 fps</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="opt-threshold">Threshold</label>
+          <input id="opt-threshold" type="number" min="0" step="0.01" placeholder="Auto">
+        </div>
+        <p class="hint">Leave both on Auto unless the numbers look wrong.</p>
+      </div>
+    </details>
+
+    <div id="video-opts" class="sections">
+    <details class="sec" id="sec-overlay">
+      <summary><span>Overlay</span><span class="sum" id="sum-overlay">Panel · right</span></summary>
+      <div class="sec-body">
+        <div class="looks" role="radiogroup" aria-label="Overlay look">
+          <input type="radio" name="opt-style" id="style-panel" value="panel" checked>
+          <label for="style-panel" title="The full instrument panel"><svg viewBox="0 0 64 40" aria-hidden="true"><rect class="lk-frame" x="0.5" y="0.5" width="63" height="39" rx="3"></rect><rect class="lk-hud" x="40" y="4" width="20" height="18" rx="2"></rect></svg>Panel</label>
+          <input type="radio" name="opt-style" id="style-strip" value="strip">
+          <label for="style-strip" title="One bar along the top edge"><svg viewBox="0 0 64 40" aria-hidden="true"><rect class="lk-frame" x="0.5" y="0.5" width="63" height="39" rx="3"></rect><rect class="lk-hud" x="4" y="4" width="56" height="7" rx="2"></rect></svg>Strip</label>
+          <input type="radio" name="opt-style" id="style-glass" value="glass">
+          <label for="style-glass" title="Three glass tiles"><svg viewBox="0 0 64 40" aria-hidden="true"><rect class="lk-frame" x="0.5" y="0.5" width="63" height="39" rx="3"></rect><rect class="lk-hud" x="42" y="4" width="18" height="8" rx="2"></rect><rect class="lk-hud" x="42" y="14" width="18" height="6" rx="2"></rect><rect class="lk-hud" x="42" y="22" width="18" height="8" rx="2"></rect></svg>Glass</label>
+          <input type="radio" name="opt-style" id="style-none" value="none">
+          <label for="style-none" title="No FPS overlay: watermark, caption and graph only"><svg viewBox="0 0 64 40" aria-hidden="true"><rect class="lk-frame" x="0.5" y="0.5" width="63" height="39" rx="3"></rect><rect class="lk-dim" x="4" y="32" width="14" height="3" rx="1"></rect></svg>None</label>
+        </div>
+        <div class="row" id="row-pos">
+          <span class="row-label" id="pos-label">Position</span>
+          <div class="seg seg-3" role="radiogroup" aria-labelledby="pos-label">
+            <input type="radio" name="opt-pos" id="pos-left" value="left">
+            <label for="pos-left">Left</label>
+            <input type="radio" name="opt-pos" id="pos-center" value="center">
+            <label for="pos-center">Middle</label>
+            <input type="radio" name="opt-pos" id="pos-right" value="right" checked>
+            <label for="pos-right">Right</label>
+          </div>
+        </div>
+        <div class="row" id="row-title">
+          <label for="opt-title">Title</label>
+          <input id="opt-title" type="text" placeholder="File name" autocomplete="off">
+        </div>
+        <div class="row" id="row-pills">
+          <span class="row-label">Pills</span>
+          <div class="chips">
+            <input type="checkbox" id="opt-target-pill" checked>
+            <label for="opt-target-pill" title="Show the TARGET pill">TARGET 60</label>
+            <input type="checkbox" id="opt-format-pill" checked>
+            <label for="opt-format-pill" title="Show the capture format pill">1080P60</label>
+          </div>
+        </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="opt-watermark-on" class="switch" checked>
+          <label for="opt-watermark-on">Watermark</label>
+          <input id="opt-watermark" type="text" value="4aLse Benchmarks" autocomplete="off" aria-label="Watermark text">
+        </div>
+        <div class="row">
+          <label for="opt-caption">Caption</label>
+          <div class="pair pair-wide">
+            <input id="opt-caption" type="text" placeholder="None" autocomplete="off">
+            <select id="opt-caption-pos" aria-label="Caption position">
+              <option value="top-left" selected>Top left</option>
+              <option value="top-center">Top middle</option>
+              <option value="top-right">Top right</option>
+              <option value="bottom-left">Bottom left</option>
+              <option value="bottom-center">Bottom middle</option>
+              <option value="bottom-right">Bottom right</option>
+            </select>
+          </div>
+        </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="opt-long" class="switch">
+          <label for="opt-long" title="A scrolling frame-time graph along the bottom edge">Frame-time graph</label>
+          <input id="opt-long-opacity" type="range" min="0" max="100" value="86" step="2" aria-label="Graph background opacity">
+          <span class="range-val" id="opt-long-opacity-val">86%</span>
+        </div>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-export">
+      <summary><span>Export</span><span class="sum" id="sum-export">x264 · same size</span></summary>
+      <div class="sec-body">
+        <div class="row">
+          <span class="row-label" id="enc-label">Encoder</span>
+          <div class="seg seg-2" role="radiogroup" aria-labelledby="enc-label">
+            <input type="radio" name="opt-enc" id="enc-gpu" value="gpu">
+            <label for="enc-gpu">GPU (NVENC)</label>
+            <input type="radio" name="opt-enc" id="enc-cpu" value="cpu" checked>
+            <label for="enc-cpu">CPU (x264)</label>
+          </div>
+        </div>
+        <p class="hint" id="enc-gpu-sub">Checking the GPU…</p>
+        <div class="row">
+          <label for="opt-res">Size</label>
+          <select id="opt-res" aria-describedby="res-hint">
+            <option value="source" selected>Same as recording</option>
+            <option value="1080">1080p</option>
+            <option value="1440">1440p</option>
+            <option value="2160">4K (2160p)</option>
+          </select>
+        </div>
+        <p id="res-hint" class="hint">1440p and 4K get a higher bitrate on YouTube. 4K renders about 3× slower.</p>
+        <div class="row" id="row-upscaler">
+          <label for="opt-upscaler">Upscaler</label>
+          <select id="opt-upscaler" aria-describedby="upscaler-hint">
+            <option value="lanczos" selected>Lanczos</option>
+            <option value="sharp">Lanczos + sharpen</option>
+            <option value="fsrcnnx">FSRCNNX on the GPU</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="opt-quality">Quality</label>
+          <select id="opt-quality">
+            <option value="high">High (larger files)</option>
+            <option value="standard" selected>Standard</option>
+            <option value="small">Smaller files</option>
+          </select>
+        </div>
+      </div>
+    </details>
     </div>
-  </section>
+  </div>
 
   <div class="actions">
-    <button type="button" id="run" class="btn-primary" disabled>Analyse</button>
-    <button type="button" id="cancel" class="btn-ghost" hidden>Cancel</button>
+    <div class="toggle-row">
+      <input type="checkbox" id="opt-render" class="switch" checked>
+      <label for="opt-render">Also render the video</label>
+    </div>
+    <div class="action-btns">
+      <button type="button" id="run" class="btn-primary" disabled>Analyse</button>
+      <button type="button" id="cancel" class="btn-ghost" hidden>Cancel</button>
+    </div>
+    <p class="run-hint" id="run-hint">Choose a recording first</p>
   </div>
 </aside>
 
 <main class="main">
+  <ol class="stepbar" id="stepbar" aria-label="Progress">
+    <li data-s="1"><i>1</i>Recording</li>
+    <li data-s="2"><i>2</i>Measure</li>
+    <li data-s="3"><i>3</i>Export</li>
+  </ol>
 
   <section id="view-empty" class="view view-center">
     <div class="drop" id="drop">
@@ -180,9 +220,11 @@
         <path d="M24 30V8M15 17l9-9 9 9"></path>
         <path d="M8 30v8a2 2 0 0 0 2 2h28a2 2 0 0 0 2-2v-8"></path>
       </svg>
-      <p class="drop-title" id="drop-title">Drop a capture recording here</p>
-      <p class="drop-sub" id="drop-sub">An OBS recording (MP4, MKV, MOV) taken at the console's refresh rate, usually 60 fps.</p>
-      <button type="button" id="pick2" class="btn-primary">Choose a video</button>
+      <p class="drop-title" id="drop-title">Drop recordings here</p>
+      <p class="drop-sub" id="drop-sub">MP4, MKV or MOV from OBS at the display's refresh rate, usually 60 fps. Several files queue up.</p>
+      <ul id="queue" class="queue" hidden></ul>
+      <button type="button" id="pick2" class="btn-primary">Choose videos</button>
+      <div id="recent" class="recent" hidden></div>
     </div>
   </section>
 
@@ -199,11 +241,12 @@
         <div class="bar"><div class="bar-fill"></div></div>
       </li>
       <li data-step="render">
-        <div class="step-head"><span class="step-name">Rendering overlay video</span><span class="step-pct"></span></div>
+        <div class="step-head"><span class="step-name">Rendering video</span><span class="step-pct"></span></div>
         <div class="bar"><div class="bar-fill"></div></div>
       </li>
     </ol>
-    <p class="hint">Measuring decodes every frame of the recording; rendering re-encodes it with the overlay. Both take about as long as the clip, or longer at high resolutions.</p>
+    <div id="long-note" class="warn" hidden></div>
+    <p class="hint">Measuring decodes every frame; rendering re-encodes it. Each takes about as long as the clip, longer at high resolutions.</p>
   </section>
 
   <section id="view-error" class="view view-center" hidden>
@@ -217,26 +260,36 @@
   <section id="view-results" class="view" hidden>
     <header class="res-head">
       <div class="res-title">
-        <p class="eyebrow">Results</p>
         <h2 id="res-name" class="view-title"></h2>
         <p id="res-meta" class="muted"></p>
       </div>
       <div class="res-actions">
-        <button type="button" id="open-video" class="btn-primary">Play overlay video</button>
-        <button type="button" id="render-again" class="btn-small" title="Render the video again with the overlay, encoder and quality set on the left, without measuring again">Render video</button>
-        <button type="button" id="open-folder" class="btn-small">Show files</button>
+        <button type="button" id="open-video" class="btn-primary">Play video</button>
+        <button type="button" id="render-again" class="btn-primary" title="Render the video with the overlay and export options on the left, without measuring again">Render video</button>
+        <details class="menu menu-right">
+          <summary class="btn-icon" aria-label="More actions">⋯</summary>
+          <div class="menu-list">
+            <button type="button" id="preview" title="Draw the preview frame again">Refresh preview</button>
+            <button type="button" id="copy-summary" title="Copy the key numbers as text">Copy summary</button>
+            <button type="button" id="open-folder">Show files</button>
+          </div>
+        </details>
       </div>
     </header>
+    <nav id="res-switch" class="res-switch" aria-label="Analysed recordings" hidden></nav>
 
     <div id="warnings" class="warnings"></div>
 
+    <figure id="preview-box" class="preview-box">
+      <img id="preview-img" alt="One frame of the recording with the overlay drawn on it" hidden>
+      <p id="preview-empty" class="preview-empty">Drawing the preview…</p>
+      <figcaption id="preview-cap" class="muted small">Live preview. It redraws when an overlay or export option changes; click the chart to move the moment.</figcaption>
+    </figure>
+
     <div class="tiles">
-      <div class="tile"><span class="tile-label">Average</span><span class="tile-value"><span id="t-avg">–</span><span class="unit">fps</span></span><span class="tile-sub" id="t-avg-sub"></span></div>
-      <div class="tile"><span class="tile-label">1% low</span><span class="tile-value"><span id="t-low1">–</span><span class="unit">fps</span></span><span class="tile-sub">99th-percentile frame time</span></div>
-      <div class="tile"><span class="tile-label">0.1% low</span><span class="tile-value"><span id="t-low01">–</span><span class="unit">fps</span></span><span class="tile-sub">Rarer, bigger hitches</span></div>
-      <div class="tile"><span class="tile-label">1 s range</span><span class="tile-value"><span id="t-range">–</span><span class="unit">fps</span></span><span class="tile-sub">Slowest to fastest second</span></div>
-      <div class="tile"><span class="tile-label">Missed target</span><span class="tile-value"><span id="t-missed">–</span><span class="unit">frames</span></span><span class="tile-sub" id="t-missed-sub"></span></div>
-      <div class="tile"><span class="tile-label">Longest frame</span><span class="tile-value"><span id="t-longest">–</span><span class="unit">ms</span></span><span class="tile-sub">Single longest time on screen</span></div>
+      <div class="tile"><span class="tile-label">Average</span><span class="tile-value"><span id="t-avg">–</span><span class="unit">fps</span></span><span class="tile-sub"><span id="t-avg-sub"></span> · <span id="t-missed">–</span> missed target (<span id="t-missed-sub"></span>)</span></div>
+      <div class="tile"><span class="tile-label">1% low</span><span class="tile-value"><span id="t-low1">–</span><span class="unit">fps</span></span><span class="tile-sub">0.1% low <span id="t-low01">–</span> fps</span></div>
+      <div class="tile"><span class="tile-label">Longest frame</span><span class="tile-value"><span id="t-longest">–</span><span class="unit">ms</span></span><span class="tile-sub" id="t-longest-sub"></span></div>
     </div>
 
     <section class="panel">
@@ -249,19 +302,23 @@
         </div>
       </div>
       <div id="chart" class="chart"></div>
+      <p id="range-hint" class="muted small">Click a second to preview the overlay there. Drag to set the range, then press Analyse to measure only that part. Double-click to clear.</p>
     </section>
 
-    <div class="split">
-      <section class="panel">
-        <h3>Long frames to check</h3>
-        <p class="muted small">Frames on screen for 200 ms or more. Each is either a real stall or a still shot such as a menu or cutscene hold.</p>
-        <ul id="stalls" class="stalls"></ul>
-      </section>
-      <section class="panel">
-        <h3>Measurement</h3>
-        <dl id="details" class="details"></dl>
-      </section>
-    </div>
+    <details class="sec" id="sec-details">
+      <summary><span>Details</span><span class="sum" id="sum-details"></span></summary>
+      <div class="split">
+        <section>
+          <h3>Long frames to check</h3>
+          <p class="muted small">On screen for 200 ms or more: a real stall, or a still shot such as a menu or cutscene hold.</p>
+          <ul id="stalls" class="stalls"></ul>
+        </section>
+        <section>
+          <h3>Measurement</h3>
+          <dl id="details" class="details"></dl>
+        </section>
+      </div>
+    </details>
   </section>
 
 </main>

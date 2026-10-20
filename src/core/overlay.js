@@ -703,12 +703,28 @@ class Overlay {
   }
 
   /** Write the subtitle to a file in slices, so an hour-long clip never needs one 500 MB string. */
-  writeTo(file) {
+  writeTo(file, { at } = {}) {
     this.render();
+    let lines = this.lines;
+    if (typeof at === 'number') { // one moment only, for a preview frame: its events, re-timed to the first second
+      const EVT = /^Dialogue: (\d+),([\d:.]+),([\d:.]+),/;
+      const secs = (s) => s.split(':').reduce((acc, v) => acc * 60 + Number(v), 0);
+      const MOVE = /\\move\(([\d.]+),([\d.]+),([\d.]+),([\d.]+),(\d+),(\d+)\)/;
+      lines = this.lines.filter((l) => { const m = EVT.exec(l); return secs(m[2]) <= at && at < secs(m[3]); })
+        .map((l) => {
+          const t0 = secs(EVT.exec(l)[2]);
+          // A moving event is frozen where it would be at `at`.
+          const frozen = l.replace(MOVE, (_, x1, y1, x2, y2, m1, m2) => {
+            const k = Math.min(1, Math.max(0, ((at - t0) * 1000 - m1) / (m2 - m1)));
+            return `\\pos(${f1(+x1 + (x2 - x1) * k)},${f1(+y1 + (y2 - y1) * k)})`;
+          });
+          return frozen.replace(EVT, 'Dialogue: $1,0:00:00.00,0:00:01.00,');
+        });
+    }
     const fd = fs.openSync(file, 'w');
     try {
       fs.writeSync(fd, this.head().join('\n') + '\n');
-      for (let i = 0; i < this.lines.length; i += 50000) fs.writeSync(fd, this.lines.slice(i, i + 50000).join('\n') + '\n');
+      for (let i = 0; i < lines.length; i += 50000) fs.writeSync(fd, lines.slice(i, i + 50000).join('\n') + '\n');
     } finally {
       fs.closeSync(fd);
     }
@@ -867,8 +883,16 @@ class GlassOverlay extends Overlay {
   }
 }
 
-const STYLES = ['panel', 'strip', 'glass'];
-const LOOKS = { panel: Overlay, strip: StripOverlay, glass: GlassOverlay };
+// ---- look D: no overlay, only the extras (watermark, caption, long graph) ----
+
+class NoneOverlay extends Overlay {
+  drawChrome(D) { this.drawExtras(D); }
+  drawNumbers() {}
+  drawFrame(tt) { if (this.lg) this.drawLongGraphTick(tt, this.frameAt(tt)); }
+}
+
+const STYLES = ['panel', 'strip', 'glass', 'none'];
+const LOOKS = { panel: Overlay, strip: StripOverlay, glass: GlassOverlay, none: NoneOverlay };
 /** The overlay for opts.style (panel when unknown). */
 function createOverlay(a, size, title, rate, position, capture, opts = {}) {
   return new (STYLES.includes(opts.style) ? LOOKS[opts.style] : Overlay)(a, size, title, rate, position, capture, opts);
@@ -877,16 +901,20 @@ function createOverlay(a, size, title, rate, position, capture, opts = {}) {
 /** ffmpeg 'ass' filter, pointed at the bundled fonts. */
 function assFilter(assName, cwd, fontsDir) {
   if (!fontsDir) return `ass=${assName}`;
-  let rel = path.relative(path.resolve(cwd), fontsDir); // absolute across drives
-  rel = rel.split(path.sep).join('/').replace(/:/g, '\\:').replace(/'/g, "\\'");
-  return `ass=${assName}:fontsdir='${rel}'`;
+  return `ass=${assName}:fontsdir=${filterPath(fontsDir, cwd)}`;
+}
+
+/** A path as a quoted ffmpeg filter option, relative to cwd (absolute across drives). */
+function filterPath(p, cwd) {
+  const rel = path.relative(path.resolve(cwd), p);
+  return `'${rel.split(path.sep).join('/').replace(/:/g, '\\:').replace(/'/g, "\\'")}'`;
 }
 
 const POSITIONS = ['left', 'center', 'right'];
 const CAPTION_POSITIONS = ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'];
 
 module.exports = {
-  Overlay, StripOverlay, GlassOverlay, createOverlay, STYLES,
-  assFilter, assTime, assColor, tc, weightedFrames, POSITIONS, CAPTION_POSITIONS, LAYOUT,
+  Overlay, StripOverlay, GlassOverlay, NoneOverlay, createOverlay, STYLES,
+  assFilter, filterPath, assTime, assColor, tc, weightedFrames, POSITIONS, CAPTION_POSITIONS, LAYOUT,
   COLORS: Object.freeze({ PANEL, LINE, TEXT, LABEL, DIM, FOOT, BLUE, AMBER, RED }),
 };

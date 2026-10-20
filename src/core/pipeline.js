@@ -7,9 +7,14 @@ const fs = require('fs');
 const path = require('path');
 const { probe, runFfmpeg, seekArgs, spanArgs, gpuStatus, abortError } = require('./ffmpeg');
 const { measureDiffs, analyse, summarise, writeCsvs, perSecondFps } = require('./analysis');
-const { createOverlay, assFilter } = require('./overlay');
+const { createOverlay, assFilter, filterPath } = require('./overlay');
 
 const FONTS_DIR = path.join(__dirname, '..', '..', 'assets', 'fonts');
+// How the picture is enlarged when the output is bigger than the recording:
+// plain Lanczos (today's default), Lanczos plus a contrast-adaptive sharpen,
+// or the FSRCNNX shader on the GPU through libplacebo (Vulkan).
+const UPSCALERS = ['lanczos', 'sharp', 'fsrcnnx'];
+const SHADER = path.join(__dirname, '..', '..', 'assets', 'shaders', 'FSRCNNX_x2_8-0-4-1.glsl');
 
 // One quality choice for both encoders. NVENC CQ 22 gives about the size of
 // x264 CRF 16 at slightly higher SSIM on 1080p60 game capture.
@@ -83,13 +88,61 @@ async function analyseVideo(opts, { onProgress = () => {}, signal } = {}) {
   };
 }
 
+/** The overlay laid out for the output size, so it stays sharp when the video
+ * is scaled; its format pill names the recording, not the output. */
+function overlayFor(an, opts, size) {
+  const title = opts.title || path.parse(an.video).name;
+  return createOverlay(an.a, size, title, opts.overlayRate || 30, opts.position || 'right', an.info, opts);
+}
+
+/** The ass filter with the bundled fonts, after the chosen upscale when the output is bigger. */
+function overlayFilter(assName, outDir, size, upscaler = 'lanczos') {
+  const fonts = fs.existsSync(FONTS_DIR) ? FONTS_DIR : null;
+  let up = '';
+  if (size.scaled) {
+    const { width: w, height: h } = size;
+    up = upscaler === 'fsrcnnx'
+      ? `libplacebo=w=${w}:h=${h}:upscaler=ewa_lanczos:custom_shader_path=${filterPath(SHADER, outDir)}:format=yuv420p,`
+      : `scale=${w}:${h}:flags=lanczos,${upscaler === 'sharp' ? 'cas=0.4,' : ''}`;
+  }
+  return up + assFilter(assName, outDir, fonts);
+}
+
+/** The chosen upscaler, and the global ffmpeg arguments it needs. */
+function upscalerFor(opts, size) {
+  const upscaler = UPSCALERS.includes(opts.upscaler) ? opts.upscaler : 'lanczos';
+  return { upscaler, args: upscaler === 'fsrcnnx' && size.scaled ? ['-init_hw_device', 'vulkan'] : [] };
+}
+
+/**
+ * One frame, `at` seconds into the analysed span, with the overlay as it would
+ * be rendered with opts: written to outDir/preview.jpg. Same opts as renderOverlay.
+ */
+async function previewFrame(an, opts = {}, at = 0, { signal } = {}) {
+  const { video, outDir, start, end, info } = an;
+  const size = outputSize(info, String(opts.resolution || 'source'));
+  const span = Math.max(0.001, (end || info.duration) - (start || 0));
+  at = Math.min(Math.max(0, Number(at) || 0), Math.max(0, span - 0.05));
+  overlayFor(an, opts, size).writeTo(path.join(outDir, 'preview.ass'), { at });
+  if (signal && signal.aborted) throw abortError();
+  const dst = path.join(outDir, 'preview.jpg');
+  const hw = await useHwDecode(opts);
+  const up = upscalerFor(opts, size);
+  await runFfmpeg([
+    '-y', ...up.args, ...(hw ? ['-hwaccel', 'cuda'] : []), '-ss', ((start || 0) + at).toFixed(3), '-i', video,
+    '-frames:v', '1', '-vf', overlayFilter('preview.ass', outDir, size, up.upscaler), '-q:v', '4', dst,
+  ], { cwd: outDir, signal });
+  return { path: dst, at };
+}
+
 /**
  * Render the overlay video from an analysis.
  * opts: { title?, position = 'right', encoder = 'gpu' | 'cpu',
  *         quality = 'standard', resolution = 'source' | '1080' | '1440' | '2160',
  *         overlayRate = 30, hwDecode?, showTarget = true, showFormat = true,
  *         caption?, captionPosition = 'top-left', watermark?,
- *         style = 'panel' | 'strip' | 'glass', longGraph = false, longGraphOpacity = 0.86 }
+ *         style = 'panel' | 'strip' | 'glass', longGraph = false, longGraphOpacity = 0.86,
+ *         upscaler = 'lanczos' | 'sharp' | 'fsrcnnx' (only when resolution is above the recording) }
  * onProgress({ phase: 'overlay'|'render', fraction })
  */
 async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = {}) {
@@ -101,14 +154,12 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
       `(${NVENC_H264_MAX} pixels). Choose a lower resolution or the CPU (x264) encoder.`);
   }
   onProgress({ phase: 'overlay', fraction: 0 });
-  // The overlay is laid out for the output size, so it stays sharp when the
-  // video is scaled; its format pill names the recording, not the output.
-  const title = opts.title || path.parse(video).name;
-  createOverlay(a, size, title, opts.overlayRate || 30, opts.position || 'right', info, opts).writeTo(path.join(outDir, 'overlay.ass'));
+  overlayFor(an, opts, size).writeTo(path.join(outDir, 'overlay.ass'));
   if (signal && signal.aborted) throw abortError();
 
   const q = QUALITY[opts.quality] || QUALITY.standard;
   const hw = await useHwDecode(opts);
+  const up = upscalerFor(opts, size);
   const video_ = encoder === 'gpu'
     ? ['-c:v', 'h264_nvenc', '-preset', 'p5', '-tune', 'hq', '-rc', 'vbr', '-cq', String(q.cq),
       '-b:v', '0', '-spatial-aq', '1']
@@ -116,17 +167,15 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
   const audio = !info.audioCodec ? []
     : MP4_AUDIO.has(info.audioCodec) ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '192k'];
   const dst = path.join(outDir, `${path.parse(video).name}_fps.mp4`);
-  const fonts = fs.existsSync(FONTS_DIR) ? FONTS_DIR : null;
   const span = Math.max(0.001, (end || info.duration) - (start || 0));
 
   const t0 = Date.now();
   onProgress({ phase: 'render', fraction: 0 });
   try {
     await runFfmpeg([
-      '-y', ...(hw ? ['-hwaccel', 'cuda'] : []), ...seekArgs(start), '-i', video, ...spanArgs(start, end),
+      '-y', ...up.args, ...(hw ? ['-hwaccel', 'cuda'] : []), ...seekArgs(start), '-i', video, ...spanArgs(start, end),
       '-map', '0:v:0', '-map', '0:a:0?',
-      '-vf', (size.scaled ? `scale=${size.width}:${size.height}:flags=lanczos,` : '') +
-        assFilter('overlay.ass', outDir, fonts),
+      '-vf', overlayFilter('overlay.ass', outDir, size, up.upscaler),
       ...video_, '-pix_fmt', 'yuv420p', ...audio, dst, // absolute: a name starting with "-" would read as an option
     ], {
       cwd: outDir, signal,
@@ -134,7 +183,9 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
     });
   } catch (e) {
     fs.rmSync(dst, { force: true }); // never leave a half-written video
-    if (e.name !== 'AbortError' && encoder === 'gpu') {
+    if (e.name !== 'AbortError' && up.args.length) {
+      e.message = `GPU upscaling (FSRCNNX, Vulkan) failed. Choose Lanczos or Lanczos + sharpen and render again.\n\n${e.message}`;
+    } else if (e.name !== 'AbortError' && encoder === 'gpu') {
       e.message = `GPU encoding (NVENC) failed. Choose CPU (x264) and render again.\n\n${e.message}`;
     }
     throw e;
@@ -156,6 +207,7 @@ function publicResult(an, render) {
     outputWidth: render && render.width ? render.width : null,
     outputHeight: render && render.height ? render.height : null,
     renderError: render && render.error ? render.error : null,
+    renderCancelled: Boolean(render && render.cancelled),
   };
 }
 
@@ -168,6 +220,6 @@ async function runJob(opts, ctx = {}) {
 }
 
 module.exports = {
-  analyseVideo, renderOverlay, runJob, publicResult, defaultOutDir,
-  FONTS_DIR, QUALITY, ENCODERS, RESOLUTIONS, outputSize,
+  analyseVideo, renderOverlay, previewFrame, runJob, publicResult, defaultOutDir,
+  FONTS_DIR, QUALITY, ENCODERS, RESOLUTIONS, UPSCALERS, outputSize, overlayFilter,
 };
