@@ -72,6 +72,7 @@ async function tryRender(an, opts, signal) {
 }
 
 ipcMain.handle('tools', () => toolStatus());
+ipcMain.handle('version', () => app.getVersion());
 ipcMain.handle('gpu', () => gpuStatus());
 ipcMain.handle('vulkan', () => vulkanStatus());
 

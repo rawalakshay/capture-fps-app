@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   tools: () => ipcRenderer.invoke('tools'),
+  version: () => ipcRenderer.invoke('version'),
   pickVideo: () => ipcRenderer.invoke('pick-video'),
   pickFolder: (current) => ipcRenderer.invoke('pick-folder', current),
   probe: (video) => ipcRenderer.invoke('probe', video),

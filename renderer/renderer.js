@@ -100,6 +100,7 @@ function radioValue(name) {
 // ---------- tools ----------
 
 async function checkTools() {
+  window.api.version().then((v) => { $('version').textContent = `v${v}`; });
   const t = await window.api.tools();
   state.toolsOk = t.ok;
   const n = $('tools');
