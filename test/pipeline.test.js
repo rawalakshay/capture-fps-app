@@ -5,6 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 const { overlayFilter, UPSCALERS } = require('../src/core/pipeline');
+const { filterPath } = require('../src/core/overlay');
 
 test('overlayFilter picks the upscale chain and escapes the shader path', () => {
   const outDir = path.resolve('F:/clips/run_fps'), big = { width: 3840, height: 2160, scaled: true }, same = { width: 1920, height: 1080, scaled: false };
@@ -19,4 +20,8 @@ test('overlayFilter picks the upscale chain and escapes the shader path', () => 
   // No scaling: the upscaler is ignored.
   assert.ok(overlayFilter('overlay.ass', outDir, same, 'fsrcnnx').startsWith('ass='));
   assert.equal(overlayFilter('overlay.ass', outDir, big, 'nope'), overlayFilter('overlay.ass', outDir, big, 'lanczos'));
+});
+
+test("filterPath quotes a path with an apostrophe the way ffmpeg's token parser reads it", () => {
+  assert.equal(filterPath(path.resolve("C:/Users/O'Neil/fonts"), path.resolve('F:/clips/run_fps')), "'C\\:/Users/O'\\''Neil/fonts'");
 });

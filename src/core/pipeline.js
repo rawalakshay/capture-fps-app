@@ -167,6 +167,7 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
   const audio = !info.audioCodec ? []
     : MP4_AUDIO.has(info.audioCodec) ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '192k'];
   const dst = path.join(outDir, `${path.parse(video).name}_fps.mp4`);
+  const part = `${dst}.part.mp4`; // the previous video is only replaced once this one is complete
   const span = Math.max(0.001, (end || info.duration) - (start || 0));
 
   const t0 = Date.now();
@@ -176,13 +177,13 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
       '-y', ...up.args, ...(hw ? ['-hwaccel', 'cuda'] : []), ...seekArgs(start), '-i', video, ...spanArgs(start, end),
       '-map', '0:v:0', '-map', '0:a:0?',
       '-vf', overlayFilter('overlay.ass', outDir, size, up.upscaler),
-      ...video_, '-pix_fmt', 'yuv420p', ...audio, dst, // absolute: a name starting with "-" would read as an option
+      ...video_, '-pix_fmt', 'yuv420p', ...audio, part, // absolute: a name starting with "-" would read as an option
     ], {
       cwd: outDir, signal,
       onProgress: (s) => onProgress({ phase: 'render', fraction: Math.min(1, s / span) }),
     });
   } catch (e) {
-    fs.rmSync(dst, { force: true }); // never leave a half-written video
+    fs.rmSync(part, { force: true }); // never leave a half-written video
     if (e.name !== 'AbortError' && up.args.length) {
       e.message = `GPU upscaling (FSRCNNX, Vulkan) failed. Choose Lanczos or Lanczos + sharpen and render again.\n\n${e.message}`;
     } else if (e.name !== 'AbortError' && encoder === 'gpu') {
@@ -190,6 +191,7 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
     }
     throw e;
   }
+  fs.renameSync(part, dst);
   return {
     path: dst, seconds: (Date.now() - t0) / 1000, encoder, hwDecode: hw,
     width: size.width, height: size.height,

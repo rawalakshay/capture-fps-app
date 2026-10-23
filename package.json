@@ -1,7 +1,7 @@
 {
   "name": "capture-fps",
   "productName": "Capture FPS",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Measure a console game's frame rate from a capture-card recording and burn an FPS overlay into the video.",
   "main": "main.js",
   "private": true,
@@ -19,9 +19,25 @@
   "build": {
     "appId": "com.4alse.capturefps",
     "productName": "Capture FPS",
-    "files": ["main.js", "preload.js", "renderer/**", "src/**", "assets/**"],
-    "extraResources": [{ "from": "vendor/ffmpeg", "to": "ffmpeg" }],
-    "win": { "target": "nsis" },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**",
+      "src/**",
+      "assets/**"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/ffmpeg",
+        "to": "ffmpeg"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

@@ -9,7 +9,7 @@ const { analyseVideo, renderOverlay, previewFrame, publicResult, defaultOutDir }
 let win = null;
 let job = null;          // { controller } while a job runs
 let lastAnalysis = null; // kept so the video can be rendered again without measuring
-let lastOutDir = null;   // only paths inside this may be opened
+const outDirs = new Set(); // every output folder of this session; only paths inside one may be opened
 
 const VIDEO_EXT = ['mp4', 'mkv', 'mov', 'avi', 'webm', 'flv', 'ts', 'm2ts'];
 
@@ -34,14 +34,12 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
-function isVideo(p) {
-  return typeof p === 'string' && VIDEO_EXT.includes(path.extname(p).slice(1).toLowerCase());
-}
-
 function insideOutput(p) {
-  if (!lastOutDir || typeof p !== 'string') return false;
-  const rel = path.relative(lastOutDir, path.resolve(p));
-  return !rel.startsWith('..') && !path.isAbsolute(rel);
+  if (typeof p !== 'string') return false;
+  return [...outDirs].some((dir) => {
+    const rel = path.relative(dir, path.resolve(p));
+    return !rel.startsWith('..') && !path.isAbsolute(rel);
+  });
 }
 
 function sendProgress(p) {
@@ -109,7 +107,7 @@ ipcMain.handle('probe', async (_e, video) => {
 ipcMain.handle('start-job', (_e, opts) => asJob(async (signal) => {
   const an = await analyseVideo(opts, { signal, onProgress: sendProgress });
   lastAnalysis = an;
-  lastOutDir = an.outDir;
+  outDirs.add(an.outDir);
   const render = opts.renderVideo === false ? null : await tryRender(an, opts, signal);
   return { ok: true, result: publicResult(an, render) };
 }));
@@ -143,8 +141,6 @@ ipcMain.handle('show-in-folder', (_e, p) => {
   shell.showItemInFolder(p);
   return true;
 });
-
-ipcMain.handle('is-video', (_e, p) => isVideo(p));
 
 app.whenReady().then(createWindow);
 app.on('window-all-closed', () => {

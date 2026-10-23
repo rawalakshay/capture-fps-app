@@ -907,7 +907,7 @@ function assFilter(assName, cwd, fontsDir) {
 /** A path as a quoted ffmpeg filter option, relative to cwd (absolute across drives). */
 function filterPath(p, cwd) {
   const rel = path.relative(path.resolve(cwd), p);
-  return `'${rel.split(path.sep).join('/').replace(/:/g, '\\:').replace(/'/g, "\\'")}'`;
+  return `'${rel.split(path.sep).join('/').replace(/:/g, '\\:').replace(/'/g, "'\\''")}'`;
 }
 
 const POSITIONS = ['left', 'center', 'right'];

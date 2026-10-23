@@ -405,7 +405,7 @@ function schedulePreview() {
   clearTimeout(previewTimer);
   previewTimer = setTimeout(runPreview, 600);
 }
-$('video-opts').addEventListener('input', schedulePreview);
+for (const id of ['pane-look', 'opt-res', 'opt-upscaler']) $(id).addEventListener('input', schedulePreview); // encoder and quality do not change the picture
 
 // ---------- running ----------
 
@@ -728,8 +728,9 @@ function renderResults(r, opts) {
   syncScrub();
   renderVerdict(s, opts);
   const nStalls = s.possible_stalls_or_static_scenes.length;
-  $('t-longest-sub').textContent = nStalls ? `${nStalls} frame${nStalls === 1 ? '' : 's'} over 200 ms` : 'No frame over 200 ms';
-  $('sum-details').textContent = `${nStalls} long frame${nStalls === 1 ? '' : 's'} · threshold ${s.threshold} ${s.threshold_source}`;
+  const nText = nStalls >= 20 ? '20+' : String(nStalls); // the summary keeps the first 20 only
+  $('t-longest-sub').textContent = nStalls ? `${nText} frame${nStalls === 1 ? '' : 's'} over 200 ms` : 'No frame over 200 ms';
+  $('sum-details').textContent = `${nText} long frame${nStalls === 1 ? '' : 's'} · threshold ${s.threshold} ${s.threshold_source}`;
   const span = opts.start || opts.end
     ? ` · ${fmtStamp(opts.start || 0)}–${opts.end ? fmtStamp(opts.end) : 'end'}`
     : '';

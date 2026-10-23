@@ -74,8 +74,9 @@ async function main() {
   const got = sha256(zip);
   if (got !== SHA256) throw new Error(`SHA-256 of the download is ${got}, expected ${SHA256}; refusing to use it`);
   console.log('unpacking');
+  const q = (s) => s.replace(/'/g, "''"); // a PowerShell single-quoted string doubles its quotes
   execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-    `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${tmp}' -Force`], { stdio: 'inherit' });
+    `Expand-Archive -LiteralPath '${q(zip)}' -DestinationPath '${q(tmp)}' -Force`], { stdio: 'inherit' });
   const root = fs.readdirSync(tmp).map((n) => path.join(tmp, n)).find((p) => fs.existsSync(path.join(p, 'bin', 'ffmpeg.exe')));
   if (!root) throw new Error('ffmpeg.exe not found in the archive');
   fs.mkdirSync(DEST, { recursive: true });
