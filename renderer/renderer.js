@@ -290,6 +290,12 @@ rememberSelect('opt-caption-pos', 'captionPosition');
 rememberSelect('opt-upscaler', 'upscaler');
 remember('opt-style', 'overlayStyle');
 
+// The theme is a token set on the root element; the chart's bar colours are fixed and read in every theme.
+function applyTheme() { document.documentElement.dataset.theme = $('theme').value; }
+rememberSelect('theme', 'theme');
+$('theme').addEventListener('change', applyTheme);
+applyTheme();
+
 // The upscaler only applies when the output is taller than the recording.
 function syncUpscaler() {
   const h = Number($('opt-res').value) || 0, src = state.queue[0] ? state.queue[0].info.height : 0;

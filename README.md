@@ -47,7 +47,8 @@ Unsigned builds work but Windows SmartScreen warns on first run.
    leave target and threshold on Auto unless the results look wrong.
    **Look** and **Export** hold everything below. The **Preset** box at
    the top saves every option under a name (the Save button beside it) and
-   brings it back with one pick. **Overlay look** picks the Panel (the full instrument panel,
+   brings it back with one pick. The **Theme** box in the header picks Dark,
+   Light, OLED black or Midnight; the app remembers it. **Overlay look** picks the Panel (the full instrument panel,
    the default), the Strip (one bar along the top edge), Glass (three
    tiles) or None (no FPS overlay at all: the video is only upscaled and gets
    the watermark, caption and long graph if set). **Position** puts it at the top left, middle or right of
