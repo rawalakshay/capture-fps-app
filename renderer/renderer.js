@@ -73,7 +73,7 @@ function updateRunButton() {
   else if (!state.queue.length) hint.textContent = 'Choose a recording first';
   else if (state.running) hint.textContent = 'Working…';
   else { // measuring takes about the clip's length, rendering about as much again
-    const a = Number($('opt-start').value) || 0, b = Number($('opt-end').value) || Infinity;
+    const a = parseTime($('opt-start').value) || 0, b = parseTime($('opt-end').value) || Infinity;
     const secs = state.queue.reduce((t, q) => t + Math.max(0, Math.min(b, q.info.duration) - a), 0) * ($('opt-render').checked ? 2 : 1);
     hint.textContent = `Ctrl+Enter · about ${fmtDuration(secs)}`;
   }
@@ -174,7 +174,6 @@ function renderQueue() {
   $('drop-title').textContent = first ? (state.queue.length > 1 ? `${state.queue.length} recordings queued` : first.name) : 'Drop recordings here';
   $('pick2').textContent = first ? 'Choose other videos' : 'Choose videos';
   $('side').classList.toggle('no-file', !first);
-  if (first && !document.querySelector('#sections .sec[open]')) $('sec-recording').open = true;
   renderRecent();
   syncSummaries();
   // Several clips keep their own file names as the overlay title.
@@ -210,7 +209,6 @@ async function addVideos(paths) {
   if (errors.length) {
     $('file-meta').textContent = errors.join(' · ');
     $('file-meta').className = 'file-meta err';
-    $('sec-recording').open = true; // the message sits inside this section
   }
   renderQueue();
   if (!state.running) show('view-empty');
@@ -256,8 +254,21 @@ document.addEventListener('drop', (e) => {
 });
 
 $('opt-render').addEventListener('change', () => {
-  $('video-opts').hidden = !$('opt-render').checked;
+  const on = $('opt-render').checked;
+  $('video-opts').hidden = $('tab-look').hidden = $('tab-export').hidden = !on;
+  if (!on) selectTab('measure');
   updateRunButton();
+});
+
+// ---------- option tabs ----------
+
+function selectTab(name) {
+  for (const b of $('tabs').children) b.setAttribute('aria-selected', String(b.id === `tab-${name}`));
+  for (const p of document.querySelectorAll('#panes .pane')) p.hidden = p.id !== `pane-${name}`;
+}
+$('tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('[role="tab"]');
+  if (b) selectTab(b.id.slice(4));
 });
 
 remember('opt-pos', 'overlayPosition');
@@ -328,31 +339,16 @@ function syncStyle() {
 for (const r of document.querySelectorAll('input[name="opt-style"]')) r.addEventListener('change', syncStyle);
 syncStyle();
 
-// Each closed section shows its current values.
+// The pill chips show what they would draw.
 function syncSummaries() {
-  const a = $('opt-start').value, b = $('opt-end').value;
-  const out = state.outBase ? fileName(state.outBase) : 'next to video';
-  $('sum-recording').textContent = !state.queue.length ? 'no file yet' : `${a || b ? `${a || '0'}–${b || 'end'} s` : 'whole clip'} · ${out}`;
-  $('sum-analysis').textContent = `target ${$('opt-target').value || 'auto'} · threshold ${$('opt-threshold').value || 'auto'}`;
   const q = state.queue[0];
   document.querySelector('label[for="opt-target-pill"]').textContent = `TARGET ${$('opt-target').value || 'auto'}`;
   document.querySelector('label[for="opt-format-pill"]').textContent = q ? `${q.info.height}P${Math.round(q.info.hz)}` : 'format';
-  const st = radioValue('opt-style');
-  $('sum-overlay').textContent = st[0].toUpperCase() + st.slice(1) + ($('row-pos').hidden ? '' : ` · ${radioValue('opt-pos')}`);
-  const res = $('opt-res').value;
-  $('sum-export').textContent = `${radioValue('opt-enc') === 'gpu' ? 'NVENC' : 'x264'} · ` +
-    `${res === 'source' ? 'same size' : res === '2160' ? '4K' : `${res}p`}${$('row-upscaler').hidden ? '' : ` · ${$('opt-upscaler').value}`}`;
 }
 $('side').addEventListener('input', syncSummaries);
 $('side').addEventListener('change', syncSummaries);
 syncSummaries();
 
-// One section open at a time.
-for (const d of document.querySelectorAll('#sections .sec')) {
-  d.addEventListener('toggle', () => {
-    if (d.open) for (const o of document.querySelectorAll('#sections .sec[open]')) if (o !== d) o.open = false;
-  });
-}
 // ⋯ menus close on a choice or a click elsewhere.
 document.addEventListener('click', (e) => {
   for (const m of document.querySelectorAll('details.menu[open]')) {
@@ -361,6 +357,13 @@ document.addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.key === 'Enter' && !$('run').disabled) $('run').click();
+  const step = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+  if (step && !$('scrub-row').hidden && !$('view-results').hidden && !/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) {
+    e.preventDefault();
+    const before = $('scrub').value;
+    $('scrub').value = Number(before) + step; // the input clamps it to its range
+    if ($('scrub').value !== before) $('scrub').dispatchEvent(new Event('change'));
+  }
 });
 
 // The last two recordings, as shortcuts on the empty screen.
@@ -411,8 +414,19 @@ function readOptions() {
     }
     return v;
   };
-  const start = num('opt-start');
-  const end = num('opt-end');
+  const time = (id, name) => {
+    const n = $(id);
+    n.classList.remove('invalid');
+    if (n.value.trim() === '') return null;
+    const v = parseTime(n.value);
+    if (!Number.isFinite(v)) {
+      n.classList.add('invalid');
+      throw new Error(`${name} must be seconds or m:ss, like 112 or 1:52`);
+    }
+    return v;
+  };
+  const start = time('opt-start', 'Start');
+  const end = time('opt-end', 'End');
   if (start !== null && end !== null && end <= start) {
     $('opt-end').classList.add('invalid');
     throw new Error('End must be after start');
@@ -513,7 +527,6 @@ $('run').addEventListener('click', async () => {
   } catch (e) {
     $('file-meta').textContent = e.message;
     $('file-meta').className = 'file-meta err';
-    $('sec-recording').open = true; // the message sits inside this section
     return;
   }
   state.running = true;
@@ -559,9 +572,7 @@ $('run').addEventListener('click', async () => {
     if (failed) addWarning(`${failed.name} failed: ${failed.error}`);
     show('view-results');
   } else if (failed) {
-    $('error-title').textContent = state.queue.length > 1 ? `${failed.name}: the analysis stopped` : 'The analysis stopped';
-    $('error-text').textContent = failed.error;
-    show('view-error');
+    showError(state.queue.length > 1 ? `${failed.name}: the analysis stopped` : 'The analysis stopped', failed.error);
   } else {
     show(state.result ? 'view-results' : 'view-empty');
   }
@@ -587,8 +598,10 @@ $('preview').addEventListener('click', () => runPreview());
 
 /** One frame at state.previewAt with the overlay options on the left, shown under the warnings. */
 async function runPreview() {
-  if (!state.result || state.running) return;
+  if (!state.result) return;
+  if (state.running) { previewDirty = true; return; } // drawn again at the new moment once this one is done
   await state.gpuReady;
+  const at = state.previewAt;
   const opts = renderOptions();
   state.running = true;
   updateRunButton();
@@ -606,7 +619,8 @@ async function runPreview() {
   $('preview-img').src = `data:image/jpeg;base64,${r.jpeg}`;
   $('preview-img').hidden = false;
   $('preview-empty').hidden = true;
-  $('preview-cap').textContent = `At ${fmtStamp((state.opts.start || 0) + r.at)} with the options on the left. Click the chart to move the moment; press Render video to apply them.`;
+  if (state.previewAt === at) { state.previewAt = r.at; syncScrub(); } // unless the user moved on meanwhile
+  $('preview-cap').textContent = `At ${fmtStamp((state.opts.start || 0) + r.at)} with the options on the left. Drag the slider, press ← →, or click the chart to move the moment; press Render video to apply the options.`;
 }
 
 function finishJob(r, opts, errorTitle) {
@@ -623,11 +637,34 @@ function finishJob(r, opts, errorTitle) {
   } else if (r.cancelled) {
     show(state.result ? 'view-results' : 'view-empty');
   } else {
-    $('error-title').textContent = errorTitle;
-    $('error-text').textContent = r.error;
-    show('view-error');
+    showError(errorTitle, r.error);
   }
 }
+
+// The common failures in plain words; anything else keeps the caller's title and opens the details.
+const KNOWN_ERRORS = [
+  [/ not found$|no such file|ENOENT/im, 'The file could not be found', 'Check that it still exists, then choose it again.'],
+  [/NVENC|h264_nvenc/, 'GPU encoding failed', 'Choose CPU (x264) under Export and render again.'],
+  [/libplacebo|vulkan|FSRCNNX/i, 'GPU upscaling failed', 'Choose Lanczos or Lanczos + sharpen under Export and render again.'],
+  [/Too few frames|No video stream|could not read the file/i, 'This file could not be measured', 'It is not a video ffmpeg can decode. Export it from OBS again as MP4 or MKV.'],
+  [/ENOSPC|No space left/i, 'The disk is full', 'Free some space or change the output folder, then try again.'],
+];
+function showError(title, raw) {
+  const known = KNOWN_ERRORS.find(([re]) => re.test(raw));
+  $('error-title').textContent = known ? known[1] : title;
+  $('error-fix').textContent = known ? known[2] : 'The details below are what ffmpeg reported.';
+  $('error-text').textContent = raw;
+  $('error-details').open = !known;
+  show('view-error');
+}
+$('error-copy').addEventListener('click', async () => {
+  const b = $('error-copy');
+  try {
+    await navigator.clipboard.writeText(`${$('error-title').textContent}\n${$('error-text').textContent}`);
+    b.textContent = 'Copied';
+    setTimeout(() => { b.textContent = 'Copy details'; }, 1500);
+  } catch (_) { /* the text is still on screen to select */ }
+});
 
 /** Show one queued item's results; the switch row lists every finished one. */
 function selectResult(item) {
@@ -679,6 +716,10 @@ function renderResults(r, opts) {
   $('preview-empty').hidden = false;
   $('preview-empty').textContent = current ? 'Drawing the preview…' : 'Analyse this recording again to preview the overlay.';
   if (current) setTimeout(schedulePreview, 0); // after the view is shown
+  $('scrub-row').hidden = !current;
+  $('scrub').max = Math.max(0, Math.ceil(c.seconds) - 1);
+  syncScrub();
+  renderVerdict(s, opts);
   const nStalls = s.possible_stalls_or_static_scenes.length;
   $('t-longest-sub').textContent = nStalls ? `${nStalls} frame${nStalls === 1 ? '' : 's'} over 200 ms` : 'No frame over 200 ms';
   $('sum-details').textContent = `${nStalls} long frame${nStalls === 1 ? '' : 's'} · threshold ${s.threshold} ${s.threshold_source}`;
@@ -760,6 +801,48 @@ function renderResults(r, opts) {
   $('render-again').classList.toggle('btn-small', Boolean(r.overlayVideo));
   drawChart();
 }
+
+/** One sentence above the numbers: how many frames hit the target, and the worst moments as chips that seek the preview. */
+function renderVerdict(s, opts) {
+  const t = s.target_fps, off = opts.start || 0;
+  const held = Math.max(0, Math.min(100, Math.round(100 - s.frames_missing_target_pct)));
+  const lv = held >= 95 ? 'ok' : held >= 80 ? 'warn' : 'bad';
+  const worst = s.possible_stalls_or_static_scenes.slice().sort((a, b) => b[1] - a[1]);
+  const box = $('verdict');
+  box.className = `verdict lv-${lv}`;
+  $('verdict-ring').style.setProperty('--pct', `${held}%`);
+  $('verdict-pct').textContent = `${held}%`;
+  const capped = worst.length >= 20 && worst[0][1] < s.longest_frame_ms; // the list holds the first 20 only
+  $('verdict-title').textContent = `${held}% of frames hit ${t} fps.` + (worst.length
+    ? ` ${capped ? '20+' : worst.length} long frame${worst.length === 1 ? '' : 's'}, the ${capped ? 'longest listed' : 'worst'} at ${fmtDuration(off + worst[0][0])}.`
+    : ' No frame stayed on screen for 200 ms or more.');
+  $('verdict-sub').textContent = `Average ${s.avg_fps.toFixed(1)} fps · 1% low ${s.low_1pct_fps.toFixed(1)} fps · ` +
+    `${s.frames_missing_target.toLocaleString()} of ${s.game_frames.toLocaleString()} frames missed the target in ${fmtDuration(s.capture.seconds)}`;
+  const chips = $('verdict-chips');
+  chips.replaceChildren();
+  for (const [at, ms] of worst.slice(0, 3)) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = ms >= 500 ? 'lv-bad' : 'lv-warn';
+    b.textContent = `${fmtDuration(off + at)} · ${ms.toFixed(0)} ms`;
+    b.title = 'Preview this moment';
+    b.addEventListener('click', () => { state.previewAt = at; runPreview(); });
+    chips.appendChild(b);
+  }
+}
+
+/** The slider and its label follow state.previewAt. */
+function syncScrub() {
+  $('scrub').value = Math.floor(state.previewAt);
+  $('scrub-val').textContent = fmtDuration(((state.opts && state.opts.start) || 0) + state.previewAt);
+}
+$('scrub').addEventListener('input', () => {
+  $('scrub-val').textContent = fmtDuration(((state.opts && state.opts.start) || 0) + Number($('scrub').value));
+});
+$('scrub').addEventListener('change', () => {
+  state.previewAt = Number($('scrub').value) + 0.5;
+  runPreview();
+});
 
 $('open-video').addEventListener('click', () => {
   if (state.result && state.result.overlayVideo) window.api.openPath(state.result.overlayVideo);
@@ -853,7 +936,7 @@ function setRange(a, b) {
   state.range = a === null ? null : [a, b];
   for (const [id, v] of [['opt-start', a], ['opt-end', b]]) {
     const n = $(id);
-    n.value = v === null ? '' : String(v);
+    n.value = v === null ? '' : Number.isInteger(v) ? fmtDuration(v) : String(v);
     n.classList.remove('invalid');
     n.classList.add('picked');
     setTimeout(() => n.classList.remove('picked'), 1200);

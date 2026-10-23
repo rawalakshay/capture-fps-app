@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // Command-line front end, same engine as the app:
-//   node src/cli.js run.mp4 [--no-video] [--start S] [--end S] [--target 30]
+//   node src/cli.js run.mp4 [--no-video] [--start S|m:ss] [--end S|m:ss] [--target 30]
 //                           [--threshold X] [--title T] [--out DIR]
 //                           [--position left|center|right] [--encoder gpu|cpu]
 //                           [--quality high|standard|small] [--cpu-decode]
@@ -14,12 +14,18 @@ const { runJob, QUALITY, ENCODERS, RESOLUTIONS, UPSCALERS } = require('./core/pi
 const { TARGETS, STALL_MS } = require('./core/analysis');
 const { POSITIONS, CAPTION_POSITIONS, STYLES } = require('./core/overlay');
 const { gpuStatus } = require('./core/ffmpeg');
+const { parseTime } = require('./core/time');
 
 function parseArgs(argv) {
   const o = { renderVideo: true };
   const num = (v, name) => {
     const n = Number(v);
     if (!Number.isFinite(n)) throw new Error(`${name} needs a number`);
+    return n;
+  };
+  const time = (v, name) => {
+    const n = parseTime(v);
+    if (!Number.isFinite(n)) throw new Error(`${name} needs seconds or m:ss, like 112 or 1:52`);
     return n;
   };
   const oneOf = (v, name, list) => {
@@ -30,8 +36,8 @@ function parseArgs(argv) {
     const a = argv[i];
     const next = () => argv[++i];
     if (a === '--no-video') o.renderVideo = false;
-    else if (a === '--start') o.start = num(next(), a);
-    else if (a === '--end') o.end = num(next(), a);
+    else if (a === '--start') o.start = time(next(), a);
+    else if (a === '--end') o.end = time(next(), a);
     else if (a === '--target') o.target = oneOf(num(next(), a), a, TARGETS);
     else if (a === '--threshold') o.threshold = num(next(), a);
     else if (a === '--title') o.title = next();

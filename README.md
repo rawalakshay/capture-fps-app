@@ -41,13 +41,13 @@ Unsigned builds work but Windows SmartScreen warns on first run.
 1. Choose one or more recordings, or drop them on the window. Several are
    analysed one after another with the same options; the results page then
    has a row of buttons to switch between them.
-2. The options sit in four sections, one open at a time; a closed section
-   shows its current values. **Recording** has the file, a start and end
-   time, and the output folder. **Analysis** has the target (20/30/60 fps)
-   and the threshold; leave both on Auto unless the results look wrong.
-   **Overlay** and **Export** hold everything below. The **Preset** box at
-   the top saves every option under a name (the ⋯ menu beside it) and brings
-   it back with one pick. **Overlay look** picks the Panel (the full instrument panel,
+2. The options sit in three tabs under the file. **Measure** has the
+   range (seconds or m:ss, such as `112` or `1:52`; leave End empty to go to
+   the end), the target (20/30/60 fps), the threshold and the output folder;
+   leave target and threshold on Auto unless the results look wrong.
+   **Look** and **Export** hold everything below. The **Preset** box at
+   the top saves every option under a name (the Save button beside it) and
+   brings it back with one pick. **Overlay look** picks the Panel (the full instrument panel,
    the default), the Strip (one bar along the top edge), Glass (three
    tiles) or None (no FPS overlay at all: the video is only upscaled and gets
    the watermark, caption and long graph if set). **Position** puts it at the top left, middle or right of
@@ -72,10 +72,12 @@ Unsigned builds work but Windows SmartScreen warns on first run.
 3. Press **Analyse** (or Ctrl+Enter). Measuring decodes the whole recording;
    rendering the video re-encodes it. Switch off **Also render the video**
    for numbers only. The line under the button says roughly how long it will take.
-4. Results open with a live preview: one frame with the overlay as the
-   options on the left would draw it. It redraws about a second after any
-   overlay or export option changes; click a second on the chart to move the
-   moment. Below it are the average, 1% and 0.1% lows, the longest frame,
+4. Results open with a verdict line (how many frames hit the target, and
+   the worst long frames as chips that jump the preview there) and a live
+   preview: one frame with the overlay as the options on the left would draw
+   it. It redraws about a second after any overlay or export option changes;
+   drag the slider under it, press ← →, or click a second on the chart to
+   move the moment. Below it are the average, 1% and 0.1% lows, the longest frame,
    the per-second FPS chart and, under **Details**, every frame of 200 ms or
    more to check (a stall, or a still shot such as a cutscene hold) and the
    measurement numbers. Drag across the chart to set the range, then press
@@ -155,7 +157,7 @@ Output goes to `<video name>_fps` next to the recording unless you change it:
 The same engine runs without the window:
 
 ```
-node src/cli.js run.mp4 [--no-video] [--start S] [--end S] [--target 30]
+node src/cli.js run.mp4 [--no-video] [--start S|m:ss] [--end S|m:ss] [--target 30]
                         [--threshold X] [--title T] [--out DIR]
                         [--position left|center|right] [--encoder gpu|cpu]
                         [--quality high|standard|small] [--cpu-decode]
@@ -174,6 +176,7 @@ node src/cli.js run.mp4 [--no-video] [--start S] [--end S] [--target 30]
 | `src/core/analysis.js` | Frame detection, threshold, statistics, CSVs |
 | `src/core/overlay.js` | The burned-in panel (ASS subtitles) |
 | `src/core/pipeline.js` | One job from measuring to the overlay video |
+| `src/core/time.js` | Seconds or m:ss typed by a person, for the window and the CLI |
 | `src/cli.js` | Command-line front end |
 | `main.js`, `preload.js` | Electron main process and the bridge to the window |
 | `renderer/` | The window: HTML, CSS and script, no framework |

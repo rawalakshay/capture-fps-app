@@ -23,15 +23,15 @@
     </div>
   </header>
 
+  <button type="button" id="pick" class="file-btn">
+    <span id="file-name" class="file-name">Choose videos…</span>
+    <span id="file-meta" class="file-meta">or drop them on the window</span>
+  </button>
+
   <div class="preset-row">
     <select id="preset" aria-label="Preset"><option value="">No preset</option></select>
-    <details class="menu">
-      <summary class="btn-icon" aria-label="Preset actions" title="Save or delete a preset">⋯</summary>
-      <div class="menu-list">
-        <button type="button" id="preset-save">Save options as…</button>
-        <button type="button" id="preset-delete" disabled>Delete preset</button>
-      </div>
-    </details>
+    <button type="button" id="preset-save" class="btn-small" title="Save the current options under a name">Save</button>
+    <button type="button" id="preset-delete" class="btn-small" disabled title="Delete the chosen preset">Delete</button>
   </div>
   <div class="preset-row" id="preset-name-row" hidden>
     <input id="preset-name" type="text" placeholder="Preset name" autocomplete="off" maxlength="40">
@@ -39,55 +39,47 @@
     <button type="button" id="preset-cancel" class="btn-small">Cancel</button>
   </div>
 
-  <div class="sections" id="sections">
-    <details class="sec" id="sec-recording">
-      <summary><span>Recording</span><span class="sum" id="sum-recording">no file yet</span></summary>
-      <div class="sec-body">
-        <button type="button" id="pick" class="file-btn">
-          <span id="file-name" class="file-name">Choose videos…</span>
-          <span id="file-meta" class="file-meta">or drop them on the window</span>
-        </button>
-        <div class="row">
-          <label for="opt-start">Range</label>
-          <div class="pair">
-            <input id="opt-start" type="number" min="0" step="0.1" placeholder="Start s" aria-label="Start (s)">
-            <input id="opt-end" type="number" min="0" step="0.1" placeholder="End s" aria-label="End (s)">
-          </div>
-        </div>
-        <div class="row">
-          <label for="out-change">Output</label>
-          <div class="out-row">
-            <span id="out-path" class="out-path">Next to the video</span>
-            <button type="button" id="out-change" class="btn-small" disabled>Change</button>
-          </div>
+  <div class="tabs" role="tablist" aria-label="Options" id="tabs">
+    <button type="button" role="tab" id="tab-measure" aria-selected="true" aria-controls="pane-measure">Measure</button>
+    <button type="button" role="tab" id="tab-look" aria-selected="false" aria-controls="pane-look">Look</button>
+    <button type="button" role="tab" id="tab-export" aria-selected="false" aria-controls="pane-export">Export</button>
+  </div>
+
+  <div class="panes" id="panes">
+    <div class="pane" id="pane-measure" role="tabpanel" aria-labelledby="tab-measure">
+      <div class="row">
+        <label for="opt-start">Range</label>
+        <div class="pair">
+          <input id="opt-start" type="text" inputmode="decimal" placeholder="Start" aria-label="Start (seconds or m:ss)" autocomplete="off">
+          <input id="opt-end" type="text" inputmode="decimal" placeholder="End" aria-label="End (seconds or m:ss)" autocomplete="off">
         </div>
       </div>
-    </details>
-
-    <details class="sec" id="sec-analysis">
-      <summary><span>Analysis</span><span class="sum" id="sum-analysis">target auto · threshold auto</span></summary>
-      <div class="sec-body">
-        <div class="row">
-          <label for="opt-target">Target</label>
-          <select id="opt-target">
-            <option value="">Auto</option>
-            <option value="20">20 fps</option>
-            <option value="30">30 fps</option>
-            <option value="60">60 fps</option>
-          </select>
-        </div>
-        <div class="row">
-          <label for="opt-threshold">Threshold</label>
-          <input id="opt-threshold" type="number" min="0" step="0.01" placeholder="Auto">
-        </div>
-        <p class="hint">Leave both on Auto unless the numbers look wrong.</p>
+      <p class="hint">Seconds or m:ss, like 112 or 1:52. Leave End empty to measure to the end. Dragging across the chart sets both.</p>
+      <div class="row">
+        <label for="opt-target">Target</label>
+        <select id="opt-target">
+          <option value="">Auto</option>
+          <option value="20">20 fps</option>
+          <option value="30">30 fps</option>
+          <option value="60">60 fps</option>
+        </select>
       </div>
-    </details>
+      <div class="row">
+        <label for="opt-threshold">Threshold</label>
+        <input id="opt-threshold" type="number" min="0" step="0.01" placeholder="Auto">
+      </div>
+      <p class="hint">Leave both on Auto unless the numbers look wrong.</p>
+      <div class="row">
+        <label for="out-change">Output</label>
+        <div class="out-row">
+          <span id="out-path" class="out-path">Next to the video</span>
+          <button type="button" id="out-change" class="btn-small" disabled>Change</button>
+        </div>
+      </div>
+    </div>
 
-    <div id="video-opts" class="sections">
-    <details class="sec" id="sec-overlay">
-      <summary><span>Overlay</span><span class="sum" id="sum-overlay">Panel · right</span></summary>
-      <div class="sec-body">
+    <div id="video-opts" class="panes">
+      <div class="pane" id="pane-look" role="tabpanel" aria-labelledby="tab-look" hidden>
         <div class="looks" role="radiogroup" aria-label="Overlay look">
           <input type="radio" name="opt-style" id="style-panel" value="panel" checked>
           <label for="style-panel" title="The full instrument panel"><svg viewBox="0 0 64 40" aria-hidden="true"><rect class="lk-frame" x="0.5" y="0.5" width="63" height="39" rx="3"></rect><rect class="lk-hud" x="40" y="4" width="20" height="18" rx="2"></rect></svg>Panel</label>
@@ -148,11 +140,8 @@
           <span class="range-val" id="opt-long-opacity-val">86%</span>
         </div>
       </div>
-    </details>
 
-    <details class="sec" id="sec-export">
-      <summary><span>Export</span><span class="sum" id="sum-export">x264 · same size</span></summary>
-      <div class="sec-body">
+      <div class="pane" id="pane-export" role="tabpanel" aria-labelledby="tab-export" hidden>
         <div class="row">
           <span class="row-label" id="enc-label">Encoder</span>
           <div class="seg seg-2" role="radiogroup" aria-labelledby="enc-label">
@@ -190,7 +179,6 @@
           </select>
         </div>
       </div>
-    </details>
     </div>
   </div>
 
@@ -211,7 +199,7 @@
   <ol class="stepbar" id="stepbar" aria-label="Progress">
     <li data-s="1"><i>1</i>Recording</li>
     <li data-s="2"><i>2</i>Measure</li>
-    <li data-s="3"><i>3</i>Export</li>
+    <li data-s="3"><i>3</i>Review</li>
   </ol>
 
   <section id="view-empty" class="view view-center">
@@ -252,8 +240,15 @@
   <section id="view-error" class="view view-center" hidden>
     <div class="error-box" role="alert">
       <h2 id="error-title">Something went wrong</h2>
-      <p id="error-text"></p>
-      <button type="button" id="error-back" class="btn-small">Back</button>
+      <p id="error-fix" class="error-fix"></p>
+      <details id="error-details" class="error-details">
+        <summary>Show details</summary>
+        <pre id="error-text"></pre>
+      </details>
+      <div class="action-btns">
+        <button type="button" id="error-back" class="btn-small">Back</button>
+        <button type="button" id="error-copy" class="btn-small">Copy details</button>
+      </div>
     </div>
   </section>
 
@@ -280,10 +275,23 @@
 
     <div id="warnings" class="warnings"></div>
 
+    <div id="verdict" class="verdict">
+      <div class="verdict-ring" id="verdict-ring"><b id="verdict-pct"></b></div>
+      <div class="verdict-text">
+        <h3 id="verdict-title"></h3>
+        <p id="verdict-sub" class="muted small"></p>
+      </div>
+      <div id="verdict-chips" class="verdict-chips"></div>
+    </div>
+
     <figure id="preview-box" class="preview-box">
       <img id="preview-img" alt="One frame of the recording with the overlay drawn on it" hidden>
       <p id="preview-empty" class="preview-empty">Drawing the preview…</p>
-      <figcaption id="preview-cap" class="muted small">Live preview. It redraws when an overlay or export option changes; click the chart to move the moment.</figcaption>
+      <div class="scrub" id="scrub-row" hidden>
+        <input type="range" id="scrub" min="0" max="0" step="1" value="0" aria-label="Preview moment">
+        <span class="range-val scrub-val" id="scrub-val">0:00</span>
+      </div>
+      <figcaption id="preview-cap" class="muted small">Live preview. It redraws when an overlay or export option changes. Drag the slider or press ← → to move the moment.</figcaption>
     </figure>
 
     <div class="tiles">
@@ -323,6 +331,7 @@
 
 </main>
 </div>
+<script src="../src/core/time.js"></script>
 <script src="renderer.js"></script>
 </body>
 </html>
