@@ -69,6 +69,7 @@
           <option value="30">30 fps</option>
           <option value="60">60 fps</option>
         </select>
+        <p class="muted small">The list follows the recording's refresh rate: a 120 Hz capture adds 24, 40 and 120.</p>
       </div>
       <div class="row">
         <label for="opt-threshold">Threshold</label>
@@ -145,6 +146,10 @@
           <input id="opt-long-opacity" type="range" min="0" max="100" value="86" step="2" aria-label="Graph background opacity">
           <span class="range-val" id="opt-long-opacity-val">86%</span>
         </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="opt-end-card" class="switch">
+          <label for="opt-end-card" title="Hold the last frame for 4 s with the run's numbers and a frame-time histogram over it">End card</label>
+        </div>
       </div>
 
       <div class="pane" id="pane-export" role="tabpanel" aria-labelledby="tab-export" hidden>
@@ -208,6 +213,28 @@
     <li data-s="3"><i>3</i>Review</li>
   </ol>
 
+  <dialog id="compare" class="dlg" aria-labelledby="compare-title">
+    <h2 id="compare-title" class="view-title">Compare videos</h2>
+    <p class="muted small">Two to four rendered videos, each started at its own offset so the clips line up, with a label over each pane. The sound is the first video's.</p>
+    <ol id="compare-list" class="compare-list"></ol>
+    <div class="action-btns">
+      <button type="button" id="compare-add" class="btn-small">Add videos…</button>
+      <label class="small muted" for="compare-layout">Layout</label>
+      <select id="compare-layout" aria-label="Layout">
+        <option value="h">Side by side</option>
+        <option value="v">Stacked</option>
+        <option value="grid">Grid</option>
+      </select>
+    </div>
+    <p id="compare-status" class="small muted"></p>
+    <div class="action-btns">
+      <button type="button" id="compare-run" class="btn-primary" disabled>Export</button>
+      <button type="button" id="compare-play" class="btn-small" hidden>Play</button>
+      <button type="button" id="compare-show" class="btn-small" hidden>Show in folder</button>
+      <button type="button" id="compare-close" class="btn-small">Close</button>
+    </div>
+  </dialog>
+
   <section id="view-empty" class="view view-center">
     <div class="drop" id="drop">
       <svg class="drop-icon" viewBox="0 0 48 48" aria-hidden="true">
@@ -270,6 +297,7 @@
         <details class="menu menu-right">
           <summary class="btn-icon" aria-label="More actions">⋯</summary>
           <div class="menu-list">
+            <button type="button" id="compare-open" title="Stack two or more rendered videos side by side">Compare videos…</button>
             <button type="button" id="preview" title="Draw the preview frame again">Refresh preview</button>
             <button type="button" id="copy-summary" title="Copy the key numbers as text">Copy summary</button>
             <button type="button" id="open-folder">Show files</button>
@@ -304,6 +332,7 @@
       <div class="tile"><span class="tile-label">Average</span><span class="tile-value"><span id="t-avg">–</span><span class="unit">fps</span></span><span class="tile-sub"><span id="t-avg-sub"></span> · <span id="t-missed">–</span> missed target (<span id="t-missed-sub"></span>)</span></div>
       <div class="tile"><span class="tile-label">1% low</span><span class="tile-value"><span id="t-low1">–</span><span class="unit">fps</span></span><span class="tile-sub">0.1% low <span id="t-low01">–</span> fps</span></div>
       <div class="tile"><span class="tile-label">Longest frame</span><span class="tile-value"><span id="t-longest">–</span><span class="unit">ms</span></span><span class="tile-sub" id="t-longest-sub"></span></div>
+      <div class="tile"><span class="tile-label">Pacing</span><span class="tile-value"><span id="t-pacing">–</span><span class="unit" id="t-pacing-unit">% even</span></span><span class="tile-sub" id="t-pacing-sub"></span></div>
     </div>
 
     <section class="panel">
@@ -323,8 +352,8 @@
       <summary><span>Details</span><span class="sum" id="sum-details"></span></summary>
       <div class="split">
         <section>
-          <h3>Long frames to check</h3>
-          <p class="muted small">On screen for 200 ms or more: a real stall, or a still shot such as a menu or cutscene hold.</p>
+          <h3>Holds</h3>
+          <p class="muted small">Frames on screen 2.5 target frames or longer. A <b>hitch</b> is a stuck frame in motion; <b>still</b> (a menu, a held shot) and <b>loading</b> (a black screen) are left out of the main numbers.</p>
           <ul id="stalls" class="stalls"></ul>
         </section>
         <section>

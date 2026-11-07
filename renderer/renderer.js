@@ -195,7 +195,7 @@ async function addVideos(paths) {
   for (const p of paths) {
     const r = await window.api.probe(p);
     if (!r.ok) { errors.push(`${fileName(p)}: ${r.error}`); continue; }
-    state.queue.push({ path: p, name: r.name, stem: r.name.replace(/\.[^.]+$/, ''), info: r.info, defaultOutDir: r.outDir, status: 'waiting', result: null });
+    state.queue.push({ path: p, name: r.name, stem: r.name.replace(/\.[^.]+$/, ''), info: r.info, targets: r.targets, defaultOutDir: r.outDir, status: 'waiting', result: null });
     rememberRecent(p);
   }
   const first = state.queue[0];
@@ -203,9 +203,10 @@ async function addVideos(paths) {
     const i = first.info;
     $('file-meta').textContent = `${i.width}×${i.height} · ${i.hz.toFixed(2)} Hz · ${fmtDuration(i.duration)}` +
       (state.queue.length > 1 ? ` · ${state.queue.length} files` : '');
-    $('drop-sub').textContent = i.hz < 59 || i.hz > 61
-      ? `Recorded at ${i.hz.toFixed(2)} fps. The game's frame rate is measured against this; record at the console's refresh rate (60) for best results.`
+    $('drop-sub').textContent = oddHz(i.hz)
+      ? `Recorded at ${i.hz.toFixed(2)} fps. The game's frame rate is measured against this; record at the console's refresh rate (60 or 120) for best results.`
       : 'Ready. Set any options on the left, then press Analyse.';
+    setTargets(first.targets);
   }
   if (errors.length) {
     $('file-meta').textContent = errors.join(' · ');
@@ -461,6 +462,7 @@ function renderOptions() {
     style: radioValue('opt-style'),
     longGraph: $('opt-long').checked,
     longGraphOpacity: Number($('opt-long-opacity').value) / 100,
+    endCard: $('opt-end-card').checked,
     encoder: radioValue('opt-enc'),
     quality: $('opt-quality').value,
     resolution: $('opt-res').value,
@@ -485,6 +487,7 @@ let currentStep = null;
 
 function onProgress({ phase, fraction }) {
   if (phase === 'done') return;
+  if (phase === 'compare') { $('compare-status').textContent = `Exporting… ${Math.round(fraction * 100)}%`; return; }
   const step = STEP_OF[phase];
   if (step !== currentStep) {
     currentStep = step;
@@ -706,6 +709,18 @@ $('error-back').addEventListener('click', () => show(state.result ? 'view-result
 
 // ---------- results ----------
 
+/** A capture that is not 60 or 120 Hz; the console's refresh is what the game is measured against. */
+const oddHz = (hz) => Math.abs(hz - 60) > 1 && Math.abs(hz - 120) > 1;
+
+/** The Target list for this recording's refresh rate, keeping the current choice when it is still possible. */
+function setTargets(targets) {
+  const sel = $('opt-target');
+  const cur = sel.value;
+  sel.replaceChildren(new Option('Auto', ''), ...(targets || [20, 30, 60]).map((t) => new Option(`${t} fps`, String(t))));
+  sel.value = [...sel.options].some((o) => o.value === cur) ? cur : '';
+  syncSummaries();
+}
+
 function setLevel(node, fps, target) {
   node.className = `lv-${level(fps, target)}`;
 }
@@ -727,10 +742,13 @@ function renderResults(r, opts) {
   $('scrub').max = Math.max(0, Math.ceil(c.seconds) - 1);
   syncScrub();
   renderVerdict(s, opts);
-  const nStalls = s.possible_stalls_or_static_scenes.length;
-  const nText = nStalls >= 20 ? '20+' : String(nStalls); // the summary keeps the first 20 only
-  $('t-longest-sub').textContent = nStalls ? `${nText} frame${nStalls === 1 ? '' : 's'} over 200 ms` : 'No frame over 200 ms';
-  $('sum-details').textContent = `${nText} long frame${nStalls === 1 ? '' : 's'} · threshold ${s.threshold} ${s.threshold_source}`;
+  const nH = s.hitches.count, nS = s.static_holds.count, nL = s.loading.count;
+  $('t-longest-sub').textContent = [nH && `${nH} hitch${nH === 1 ? '' : 'es'}`, nS && `${nS} still`, nL && `${nL} loading`].filter(Boolean).join(' · ') || 'No hitches';
+  $('sum-details').textContent = `${s.holds.length}${s.holds.length >= 40 ? '+' : ''} hold${s.holds.length === 1 ? '' : 's'} · threshold ${s.threshold} ${s.threshold_source}`;
+  $('t-pacing').textContent = s.pacing.even_pct === null ? '–' : s.pacing.even_pct.toFixed(0);
+  $('t-pacing-unit').textContent = s.pacing.even_pct === null ? 'unlocked' : '% even';
+  if (s.pacing.even_pct !== null) setLevel($('t-pacing'), s.pacing.even_pct, 100);
+  $('t-pacing-sub').textContent = `stutter time ${s.stutter_time_pct}%` + (s.tears.count ? ` · ${s.tears.count} tears` : '');
   const span = opts.start || opts.end
     ? ` · ${fmtStamp(opts.start || 0)}–${opts.end ? fmtStamp(opts.end) : 'end'}`
     : '';
@@ -752,8 +770,8 @@ function renderResults(r, opts) {
     addWarning(`The recording itself is missing ${c.dropped_by_recorder} refresh${c.dropped_by_recorder === 1 ? '' : 'es'} (OBS dropped frames). Results near those points are not reliable.`);
   }
   if (r.renderError) addWarning(`The overlay video was not made. ${r.renderError}`);
-  if (c.refresh_hz < 59 || c.refresh_hz > 61) {
-    addWarning(`Recorded at ${c.refresh_hz} fps. Match OBS to the console's refresh rate (usually 60) so every refresh is captured.`);
+  if (oddHz(c.refresh_hz)) {
+    addWarning(`Recorded at ${c.refresh_hz} fps. Match OBS to the console's refresh rate (60, or 120 for a 40 fps mode) so every refresh is captured.`);
   }
   if (!$('long-note').hidden) addWarning($('long-note').textContent);
   const item = state.queue.find((q) => q.result === r);
@@ -761,21 +779,24 @@ function renderResults(r, opts) {
 
   const stalls = $('stalls');
   stalls.replaceChildren();
-  const list = s.possible_stalls_or_static_scenes;
+  const list = s.holds;
   if (!list.length) {
     const li = document.createElement('li');
     li.className = 'empty';
-    li.textContent = 'None. No frame stayed on screen for 200 ms or more.';
+    li.textContent = 'None. No frame stayed on screen for 2.5 target frames or more.';
     stalls.appendChild(li);
   }
-  for (const [at, ms] of list) {
+  for (const [at, ms, kind] of list) {
     const li = document.createElement('li');
     const a = document.createElement('span');
     a.textContent = fmtStamp((opts.start || 0) + at);
+    const k = document.createElement('span');
+    k.className = 'kind';
+    k.textContent = kind === 'static' ? 'still' : kind;
     const b = document.createElement('span');
     b.textContent = `${ms.toFixed(1)} ms`;
-    b.className = ms >= 500 ? 'lv-bad' : 'lv-warn';
-    li.append(a, b);
+    b.className = kind !== 'hitch' ? 'lv-ok' : ms >= 500 ? 'lv-bad' : 'lv-warn';
+    li.append(a, k, b);
     stalls.appendChild(li);
   }
 
@@ -787,6 +808,10 @@ function renderResults(r, opts) {
     ['Refreshes', c.refreshes.toLocaleString()],
     ['Game frames', s.game_frames.toLocaleString()],
     ['1 s range', `${s.min_1s_fps}–${s.max_1s_fps} fps`],
+    ['Holds by refreshes', `1× ${s.pacing.holds[1]} · 2× ${s.pacing.holds[2]} · 3× ${s.pacing.holds[3]} · 4×+ ${s.pacing.holds['4+']}`],
+    ['Tears', s.tears.count ? `${s.tears.count} (${s.tears.per_minute} per minute)` : 'None'],
+    ['Left out', `${s.static_holds.seconds} s still · ${s.loading.seconds} s loading`],
+    ['With them', `avg ${s.all_frames.avg_fps} · 1% low ${s.all_frames.low_1pct_fps} · 0.1% low ${s.all_frames.low_0_1pct_fps} fps`],
     ['Threshold', `${s.threshold} (${s.threshold_source})`],
     ['Diff p5 / p50 / p95', `${p.p5} / ${p.p50} / ${p.p95}`],
     ['Dropped by recorder', String(c.dropped_by_recorder)],
@@ -815,17 +840,18 @@ function renderVerdict(s, opts) {
   const t = s.target_fps, off = opts.start || 0;
   const held = Math.max(0, Math.min(100, Math.round(100 - s.frames_missing_target_pct)));
   const lv = held >= 95 ? 'ok' : held >= 80 ? 'warn' : 'bad';
-  const worst = s.possible_stalls_or_static_scenes.slice().sort((a, b) => b[1] - a[1]);
+  const worst = s.hitches.first.slice().sort((a, b) => b[1] - a[1]);
   const box = $('verdict');
   box.className = `verdict lv-${lv}`;
   $('verdict-ring').style.setProperty('--pct', `${held}%`);
   $('verdict-pct').textContent = `${held}%`;
-  const capped = worst.length >= 20 && worst[0][1] < s.longest_frame_ms; // the list holds the first 20 only
+  const capped = s.hitches.count > worst.length; // the list holds the first 20 only
   $('verdict-title').textContent = `${held}% of frames hit ${t} fps.` + (worst.length
-    ? ` ${capped ? '20+' : worst.length} long frame${worst.length === 1 ? '' : 's'}, the ${capped ? 'longest listed' : 'worst'} at ${fmtDuration(off + worst[0][0])}.`
-    : ' No frame stayed on screen for 200 ms or more.');
+    ? ` ${s.hitches.count} hitch${s.hitches.count === 1 ? '' : 'es'}, the ${capped ? 'worst listed' : 'worst'} at ${fmtDuration(off + worst[0][0])}.`
+    : ' No hitches.');
   $('verdict-sub').textContent = `Average ${s.avg_fps.toFixed(1)} fps · 1% low ${s.low_1pct_fps.toFixed(1)} fps · ` +
-    `${s.frames_missing_target.toLocaleString()} of ${s.game_frames.toLocaleString()} frames missed the target in ${fmtDuration(s.capture.seconds)}`;
+    (s.pacing.even_pct === null ? '' : `pacing ${s.pacing.even_pct.toFixed(0)}% even · `) +
+    `${s.frames_missing_target.toLocaleString()} of ${s.game_frames.toLocaleString()} frames missed the target in ${fmtDuration(s.seconds)} of play`;
   const chips = $('verdict-chips');
   chips.replaceChildren();
   for (const [at, ms] of worst.slice(0, 3)) {
@@ -956,6 +982,79 @@ function setRange(a, b) {
 
 new ResizeObserver(() => { if (!$('view-results').hidden) drawChart(); }).observe($('chart'));
 
+// ---------- compare ----------
+
+const compare = { inputs: [], out: null };
+
+function renderCompareList() {
+  const ol = $('compare-list');
+  ol.replaceChildren();
+  compare.inputs.forEach((inp, i) => {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.title = inp.file;
+    name.textContent = fileName(inp.file);
+    const off = document.createElement('input');
+    off.type = 'text'; off.inputMode = 'decimal'; off.placeholder = 'Offset'; off.value = inp.offset || '';
+    off.title = 'Start this video this many seconds in (seconds or m:ss)';
+    off.addEventListener('input', () => { inp.offset = off.value; });
+    const label = document.createElement('input');
+    label.type = 'text'; label.placeholder = 'Label'; label.value = inp.label;
+    label.addEventListener('input', () => { inp.label = label.value; });
+    const rm = document.createElement('button');
+    rm.type = 'button'; rm.className = 'btn-icon'; rm.textContent = '×'; rm.title = 'Remove';
+    rm.addEventListener('click', () => { compare.inputs.splice(i, 1); renderCompareList(); });
+    li.append(name, off, label, rm);
+    ol.appendChild(li);
+  });
+  $('compare-run').disabled = compare.inputs.length < 2 || compare.inputs.length > 4 || state.running;
+  $('compare-status').textContent = compare.inputs.length < 2 ? 'Add at least two videos.' : compare.inputs.length > 4 ? 'At most four videos.' : '';
+}
+
+$('compare-open').addEventListener('click', () => {
+  // The videos rendered this session are the natural picks.
+  if (!compare.inputs.length) {
+    for (const q of state.queue) {
+      if (q.result && q.result.overlayVideo) compare.inputs.push({ file: q.result.overlayVideo, offset: '', label: q.stem });
+    }
+  }
+  $('compare-play').hidden = $('compare-show').hidden = !compare.out;
+  renderCompareList();
+  $('compare').showModal();
+});
+$('compare-close').addEventListener('click', () => $('compare').close());
+$('compare-add').addEventListener('click', async () => {
+  for (const p of await window.api.pickVideo()) {
+    if (!compare.inputs.some((i) => i.file === p)) compare.inputs.push({ file: p, offset: '', label: fileName(p).replace(/\.[^.]+$/, '').replace(/_fps$/, '') });
+  }
+  renderCompareList();
+});
+$('compare-run').addEventListener('click', async () => {
+  if (state.running) return;
+  await state.gpuReady;
+  const inputs = compare.inputs.map((i) => ({ file: i.file, offset: parseTime(String(i.offset || '0')) || 0, label: i.label }));
+  const o = renderOptions();
+  state.running = true;
+  updateRunButton();
+  $('compare-run').disabled = true;
+  $('compare-play').hidden = $('compare-show').hidden = true;
+  $('compare-status').textContent = 'Exporting… 0%';
+  const r = await window.api.compare({ inputs, layout: $('compare-layout').value, encoder: o.encoder, quality: o.quality });
+  state.running = false;
+  updateRunButton();
+  $('compare-run').disabled = false;
+  if (!r.ok) {
+    $('compare-status').textContent = r.cancelled ? 'Cancelled.' : `The export failed. ${r.error}`;
+    return;
+  }
+  compare.out = r.result.path;
+  $('compare-status').textContent = `Done in ${fmtDuration(r.result.seconds)}: ${r.result.width}×${r.result.height} · ${fileName(r.result.path)}`;
+  $('compare-play').hidden = $('compare-show').hidden = false;
+});
+$('compare-play').addEventListener('click', () => compare.out && window.api.openPath(compare.out));
+$('compare-show').addEventListener('click', () => compare.out && window.api.showInFolder(compare.out));
+
 // ---------- copy summary ----------
 
 $('copy-summary').addEventListener('click', async () => {
@@ -968,8 +1067,11 @@ $('copy-summary').addEventListener('click', async () => {
     `Average ${s.avg_fps.toFixed(1)} fps · 1% low ${s.low_1pct_fps.toFixed(1)} · 0.1% low ${s.low_0_1pct_fps.toFixed(1)} · ` +
       `Missed target ${s.frames_missing_target_pct}% · Longest frame ${s.longest_frame_ms.toFixed(1)} ms`,
   ];
-  const stalls = s.possible_stalls_or_static_scenes;
-  if (stalls.length) lines.push(`Long frames: ${stalls.slice(0, 8).map(([at, ms]) => `${fmtStamp(off + at)} (${ms.toFixed(0)} ms)`).join(', ')}`);
+  lines.push((s.pacing.even_pct === null ? '' : `Pacing ${s.pacing.even_pct}% even · `) + `Stutter time ${s.stutter_time_pct}% · ` +
+    `${s.hitches.count} hitches` + (s.tears.count ? ` · ${s.tears.count} tears` : ''));
+  const hitches = s.hitches.first;
+  if (hitches.length) lines.push(`Hitches: ${hitches.slice(0, 8).map(([at, ms]) => `${fmtStamp(off + at)} (${ms.toFixed(0)} ms)`).join(', ')}`);
+  if (s.static_holds.count || s.loading.count) lines.push(`Left out: ${s.static_holds.seconds} s still, ${s.loading.seconds} s loading`);
   if (c.dropped_by_recorder) lines.push(`Recorder dropped ${c.dropped_by_recorder} refreshes`);
   const b = $('copy-summary');
   try {
@@ -989,7 +1091,7 @@ const PRESET_CONTROLS = {
   showTarget: ['opt-target-pill', 'checked'], showFormat: ['opt-format-pill', 'checked'],
   caption: ['opt-caption', 'value'], captionPosition: ['opt-caption-pos', 'value'],
   watermarkOn: ['opt-watermark-on', 'checked'], watermark: ['opt-watermark', 'value'],
-  longGraph: ['opt-long', 'checked'], longGraphOpacity: ['opt-long-opacity', 'value'],
+  longGraph: ['opt-long', 'checked'], longGraphOpacity: ['opt-long-opacity', 'value'], endCard: ['opt-end-card', 'checked'],
   quality: ['opt-quality', 'value'], resolution: ['opt-res', 'value'], upscaler: ['opt-upscaler', 'value'],
   target: ['opt-target', 'value'], threshold: ['opt-threshold', 'value'],
 };

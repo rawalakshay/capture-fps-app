@@ -4,7 +4,8 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { toolStatus, gpuStatus, vulkanStatus, probe } = require('./src/core/ffmpeg');
-const { analyseVideo, renderOverlay, previewFrame, publicResult, defaultOutDir } = require('./src/core/pipeline');
+const { analyseVideo, renderOverlay, previewFrame, publicResult, defaultOutDir, compareVideos } = require('./src/core/pipeline');
+const { targetsFor } = require('./src/core/analysis');
 
 let win = null;
 let job = null;          // { controller } while a job runs
@@ -96,7 +97,7 @@ ipcMain.handle('probe', async (_e, video) => {
   try {
     if (!fs.existsSync(video)) return { ok: false, error: 'File not found' };
     const info = await probe(video);
-    return { ok: true, info, outDir: defaultOutDir(video), name: path.basename(video) };
+    return { ok: true, info, outDir: defaultOutDir(video), name: path.basename(video), targets: targetsFor(info.hz) };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -124,6 +125,13 @@ ipcMain.handle('preview', (_e, opts, at) => asJob(async (signal) => {
   if (!lastAnalysis) return { ok: false, error: 'Analyse a recording first.' };
   const r = await previewFrame(lastAnalysis, opts, at, { signal });
   return { ok: true, at: r.at, jpeg: fs.readFileSync(r.path).toString('base64') };
+}));
+
+// Stack rendered videos side by side; the output folder joins the ones that may be opened.
+ipcMain.handle('compare', (_e, opts) => asJob(async (signal) => {
+  const r = await compareVideos(opts, { signal, onProgress: sendProgress });
+  outDirs.add(path.dirname(r.path));
+  return { ok: true, result: r };
 }));
 
 ipcMain.handle('cancel-job', () => {

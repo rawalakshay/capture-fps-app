@@ -27,7 +27,7 @@ test('parseDiffs reads the metadata filter output and restores the first refresh
   ].join('\n');
   const rows = parseDiffs(text, peakText);
   assert.equal(rows.length, 4);
-  assert.deepEqual(rows[0], [0, Infinity]);
+  assert.deepEqual(rows[0].slice(0, 2), [0, Infinity]);
   assert.ok(Math.abs(rows[1][0] - 0.016684) < 1e-6 && rows[1][1] === 0.012345 && rows[1][2] === 3);
   assert.ok(Math.abs(rows[3][0] - 0.050051) < 1e-6 && rows[3][1] === 0.02 && rows[3][2] === 5);
   assert.equal(rows[2][2], 201);

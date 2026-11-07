@@ -6,7 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { bisectLeft, bisectRight, percentile } = require('./analysis');
+const { bisectLeft, bisectRight, percentile, summarise, isPlay } = require('./analysis');
 
 const PANEL = 0x0A0C0F, LINE = 0x3A434C;
 const TEXT = 0xEEF2F5, LABEL = 0xC9D0D6, DIM = 0xA7B0B8, FOOT = 0x8E98A1;
@@ -27,6 +27,9 @@ const STALL_LIVE_MS = 100, STALL_LIVE_FRAMES = 3; // the frame on screen counts 
 const MAX_OVERFLOW_LABELS = 4;
 const LG_H = 116, LG_PAD = 16, LG_TOP = 32, LG_CH = 72, LG_WIN = 7.5; // long graph box, chart top/height, window s
 const WATERMARK = '4aLse Benchmarks';     // bottom left of every video; opts.watermark overrides, '' removes it
+const TEAR_SHOW_S = 0.4;                  // a tear line stays on the video this long, fading out
+const END_CARD_S = 4;                     // the results card after the clip (opts.endCard)
+const HOLD_NAMES = { hitch: 'HITCH', static: 'STILL', loading: 'LOADING' };
 
 // Layout in panel px: text baselines and box tops, as in the design.
 const LAYOUT = Object.freeze({
@@ -40,7 +43,7 @@ const LAYOUT = Object.freeze({
   PACING_BASE: 428, PACING_Y: 436, PACING_H: 14,
   FOOT_BASE: 466,
   COL1_R: PW - PAD - 62.4 - 18, COL2_R: PW - PAD,
-  RUN_COLS: Object.freeze([1, 2, 3, 4].map((i) => PAD + IW * i / 4)),
+  RUN_COLS: Object.freeze([1, 2, 3, 4, 5].map((i) => PAD + IW * i / 5)),
 });
 
 const f1 = (x) => x.toFixed(1);
@@ -152,11 +155,12 @@ function shortSource(s) {
  * cannot render a frame shorter than its target, so a tick that falls
  * mid-frame does not count that frame as finished.
  */
-function weightedFrames(starts, ends, t0, t1, tNow, floorS = 0) {
+function weightedFrames(starts, ends, t0, t1, tNow, floorS = 0, kinds = null) {
   let total = 0;
   for (let i = bisectRight(ends, t0); i < starts.length && starts[i] < t1; i++) {
     const st = starts[i];
     if (st > tNow) break;
+    if (kinds && !isPlay(kinds[i])) continue;
     const complete = ends[i] <= tNow;
     const en = complete ? ends[i] : tNow;
     const dur = complete ? en - st : Math.max(en - st, floorS);
@@ -320,13 +324,14 @@ class Overlay {
     this.slot(`${key}${i}t`, 4, t, this.textBody(lx + w - 4, top + h - DESCENT * size, this.run(s, MONO_SEMI, size, RED), size, 'r'));
   }
 
-  /** Outlined bar for the frame still on screen; inset 1 px so the border stays in its column. */
+  /** Outlined bar for the frame still on screen; inset 1 px so the border stays in its column.
+   * stalled: 'hitch' draws it red, 'paused' (a still or a load) dim, anything else plain. */
   liveBar(t, x, w, h, stalled, bottom = LAYOUT.FT_TOP + CHART_H, key = 'ftLive') {
-    const col = stalled ? RED : LABEL;
+    const col = stalled === 'hitch' ? RED : stalled === 'paused' ? FOOT : LABEL;
     const { ox, oy } = this;
     const p = rectsPath([[this.px(ox + x + 1), this.px(oy + bottom - h + 1),
       this.px(Math.max(0.5, w - 2)), this.px(Math.max(0.5, h - 2))]]);
-    this.slot(key, 2, t, this.shapeBody(p, col, 1.0, col, stalled ? 0.55 : 0.3));
+    this.slot(key, 2, t, this.shapeBody(p, col, 1.0, col, stalled === 'hitch' ? 0.55 : 0.3));
   }
 
   /** Frame-time chart: fixed columns filled from the right, the newest completed frame
@@ -335,14 +340,15 @@ class Overlay {
     const { targetMs } = this.m;
     const fbw = (w - (slots - 1)) / slots, scale = 3 * targetMs;
     const first = slots - 1 - f.last.length;
-    const groups = new Map([[BLUE, []], [AMBER, []], [RED, []]]);
-    const keys = new Map([[BLUE, `${key}Blue`], [AMBER, `${key}Amber`], [RED, `${key}Red`]]);
+    const groups = new Map([[BLUE, []], [AMBER, []], [RED, []], [FOOT, []]]);
+    const keys = new Map([[BLUE, `${key}Blue`], [AMBER, `${key}Amber`], [RED, `${key}Red`], [FOOT, `${key}Dim`]]);
     const overflow = [];
     f.last.forEach((ms, j) => {
       const bh = Math.max(2.0, Math.min(1.0, ms / scale) * h);
       const bx = x + (first + j) * (fbw + 1);
-      groups.get(ftBarColor(ms, targetMs)).push([bx, top + h - bh, fbw, bh]);
-      if (ms > scale * 1.001) overflow.push({ x: bx, ms });
+      const play = isPlay(f.lastKinds[j]);
+      groups.get(play ? ftBarColor(ms, targetMs) : FOOT).push([bx, top + h - bh, fbw, bh]);
+      if (ms > scale * 1.001 && play) overflow.push({ x: bx, ms });
     });
     for (const [col, rs] of groups) this.slot(keys.get(col), 2, tt, rs.length ? this.rectsBody(rs, col, 1.0) : null);
     const shown = overflow.slice(-MAX_OVERFLOW_LABELS), okey = key === 'ft' ? 'ovl' : `${key}ovl`;
@@ -350,7 +356,7 @@ class Overlay {
       if (shown[i]) this.overflowLabel(i, tt, shown[i].x, fbw, shown[i].ms, top + 2, x + w / 2, okey);
       else { this.slot(`${okey}${i}b`, 3, tt, null); this.slot(`${okey}${i}t`, 4, tt, null); }
     }
-    this.liveBar(tt, x + (slots - 1) * (fbw + 1), fbw, Math.max(2.0, Math.min(1.0, f.elapsed / scale) * h), f.stalled, top + h, `${key}Live`);
+    this.liveBar(tt, x + (slots - 1) * (fbw + 1), fbw, Math.max(2.0, Math.min(1.0, f.elapsed / scale) * h), f.stallKind, top + h, `${key}Live`);
   }
 
   /** Small upward triangle, 7 x 5.5 px, base at baseY, left corner at x. */
@@ -377,78 +383,115 @@ class Overlay {
 
   // ---- model ----
 
-  /** Keep the completed frames' times sorted as ticks advance (for the RUN percentiles). */
+  /** Keep the completed play frames' times sorted as ticks advance (for the RUN percentiles);
+   * stills and loads only add to the paused time. */
   absorbCompleted(hi) {
-    const { frameMs } = this.a;
+    const { frameMs, kind } = this.a;
     for (; this.doneCount < hi; this.doneCount++) {
       const ms = frameMs[this.doneCount];
+      if (!isPlay(kind[this.doneCount])) { this.pausedS += ms / 1000; continue; }
       this.sortedDone.splice(bisectLeft(this.sortedDone, ms), 0, ms);
       if (ms > this.m.targetMs + this.m.refreshMs * 0.5) this.missedCount++;
     }
   }
 
+  /** Seconds of [t0, t1) spent in stills and loads, the frame on screen at tNow included. */
+  pausedIn(t0, t1, tNow) {
+    const { starts, kind } = this.a, ends = this.ends;
+    let s = 0;
+    for (let i = bisectRight(ends, t0); i < starts.length && starts[i] < t1; i++) {
+      if (starts[i] > tNow || isPlay(kind[i])) continue;
+      s += Math.max(0, Math.min(ends[i], tNow, t1) - Math.max(starts[i], t0));
+    }
+    return s;
+  }
+
   /** Everything the numbers tick shows at tq. */
   numbersAt(tq) {
-    const { starts, frameMs, droppedAt } = this.a;
-    const ends = this.ends;
+    const { starts, frameMs, kind, droppedAt } = this.a;
+    const ends = this.ends, hitchAt = this.hitchAt, tearAt = this.tearAt;
     const { target, refreshMs, kRef, floorS, yMax } = this.m;
     const minSpan = refreshMs / 1000;
-    const span05 = Math.min(0.5, tq), span10 = Math.min(10, tq);
-    const hero = span05 >= minSpan ? weightedFrames(starts, ends, tq - span05, tq, tq, floorS) / span05 : null;
-    const avg = span10 >= minSpan ? weightedFrames(starts, ends, tq - span10, tq, tq, floorS) / span10 : null;
+    // Stills and loads are not play: their time comes off the window.
+    const rate = (span) => {
+      if (span < minSpan) return null;
+      const live = span - this.pausedIn(tq - span, tq, tq);
+      return live >= minSpan ? weightedFrames(starts, ends, tq - span, tq, tq, floorS, kind) / live : null;
+    };
+    const hero = rate(Math.min(0.5, tq)), avg = rate(Math.min(10, tq));
     const hiQ = bisectRight(ends, tq);
-    const w10 = frameMs.slice(bisectLeft(ends, tq - 10), hiQ);
+    const w10 = [];
+    for (let i = bisectLeft(ends, tq - 10); i < hiQ; i++) if (isPlay(kind[i])) w10.push(frameMs[i]);
     const s10 = w10.slice().sort((x, y) => x - y);
     const low = s10.length >= MIN_FRAMES_LOW ? 1000 / percentile(s10, 0.99) : null;
-    let on = 0, late = 0, stall = 0;
+    let on = 0, late = 0, stall = 0, short = 0, even = 0;
     for (const ms of w10) {
       const n = Math.round(ms / refreshMs);
       if (n <= kRef) on++; else if (n <= 2 * kRef) late++; else stall++;
+      if (n < kRef) short++; else if (n === kRef) even++;
     }
     const pacing = w10.length ? { on, late, stall, n: w10.length } : null;
-    // Run so far: completed frames plus the share of the frame on screen.
+    // With a cap below the refresh rate, pacing is how many frames held exactly the cap's refreshes.
+    const cadence = pacing && kRef > 1 ? { short, even, late, stall, n: w10.length } : null;
+    // Run so far: completed play frames plus the share of the frame on screen, over the play time.
+    this.absorbCompleted(hiQ);
     let runAvg = null;
     if (tq >= minSpan) {
       const cur = bisectRight(starts, tq) - 1;
-      let frac = 0;
-      if (cur >= hiQ) { const el = tq - starts[cur]; frac = el / Math.max(el, floorS); }
-      runAvg = (hiQ + frac) / tq;
+      let frac = 0, paused = this.pausedS;
+      if (cur >= hiQ) {
+        const el = tq - starts[cur];
+        if (isPlay(kind[cur])) frac = el / Math.max(el, floorS); else paused += el;
+      }
+      const live = tq - paused;
+      runAvg = live >= minSpan ? (this.sortedDone.length + frac) / live : null;
     }
-    this.absorbCompleted(hiQ);
     const done = this.sortedDone;
     const run1 = done.length >= MIN_FRAMES_LOW ? 1000 / percentile(done, 0.99) : null;
     const run01 = done.length >= MIN_FRAMES_LOW ? 1000 / percentile(done, 0.999) : null;
     const missed = done.length ? this.missedCount / done.length : null;
+    const hitches = bisectRight(hitchAt, tq);
     const bucketEnd = Math.floor(tq / FPS_BUCKET) * FPS_BUCKET;
     const bars = [];
     for (let j = 0; j < FPS_BARS; j++) {
       const s = bucketEnd - (FPS_BARS - j) * FPS_BUCKET;
       if (s < 0) continue;
-      const fps = weightedFrames(starts, ends, s, s + FPS_BUCKET, tq, floorS) / FPS_BUCKET;
+      const live = FPS_BUCKET - this.pausedIn(s, s + FPS_BUCKET, tq);
+      // A slice wholly inside a still or a load has no play to rate: it is drawn dim, not as 0 fps.
+      const paused = live <= 0;
+      const fps = paused ? 0 : weightedFrames(starts, ends, s, s + FPS_BUCKET, tq, floorS, kind) / live;
       const drop = bisectLeft(droppedAt, s) < bisectLeft(droppedAt, s + FPS_BUCKET);
-      bars.push({ j, fps, drop });
+      const hitch = bisectLeft(hitchAt, s) < bisectLeft(hitchAt, Math.min(tq, s + FPS_BUCKET));
+      bars.push({ j, fps, drop, hitch, paused });
     }
-    const vals = bars.map((b) => b.fps);
+    const vals = bars.filter((b) => !b.paused).map((b) => b.fps);
     return {
-      hero, avg, low, pacing, runAvg, run1, run01, missed, bars, yMax, target,
+      hero, avg, low, pacing, cadence, runAvg, run1, run01, missed, hitches, bars, yMax, target,
       mn: vals.length ? Math.min(...vals) : null, mx: vals.length ? Math.max(...vals) : null,
       dropsInWindow: bars.some((b) => b.drop),
+      tearsInWindow: bisectLeft(tearAt, tq - 10) < bisectRight(tearAt, tq),
     };
   }
 
   /** The frame on screen and the last completed frames at tt. */
   frameAt(tt) {
-    const { starts, frameMs } = this.a;
+    const { starts, frameMs, kind } = this.a;
     const ends = this.ends;
     const hiT = bisectRight(ends, tt);
     const lastMs = hiT > 0 ? frameMs[hiT - 1] : null;
     const cur = bisectRight(starts, tt) - 1;
     const elapsed = cur >= 0 ? (tt - starts[cur]) * 1000 : 0;
-    const last = frameMs.slice(Math.max(0, hiT - FT_SHOW), hiT);
+    const lo = Math.max(0, hiT - FT_SHOW);
+    const last = frameMs.slice(lo, hiT), lastKinds = kind.slice(lo, hiT);
     const spanS = last.length ? ends[hiT - 1] - starts[hiT - last.length] : 0;
+    const stalled = elapsed >= this.m.stallMs;
+    // What the frame on screen turns out to be; a hold the engine did not class is a plain stall.
+    const k = cur >= 0 ? kind[cur] : 'ok';
+    const stallKind = !stalled ? null : k === 'static' || k === 'loading' ? 'paused' : 'hitch';
+    const play = last.filter((_, j) => isPlay(lastKinds[j]));
     return {
-      lastMs, elapsed, stalled: elapsed >= this.m.stallMs, last, spanS,
-      ftMax: last.length ? Math.max(...last) : null,
+      lastMs, elapsed, stalled, stallKind, kind: k, last, lastKinds, spanS,
+      ftMax: play.length ? Math.max(...play) : null,
     };
   }
 
@@ -501,7 +544,7 @@ class Overlay {
     this.text(0, D, L.COL2_R, L.EYEBROW_BASE, this.run('LAST 10 S', SANS_MED, 13, FOOT, 0.06), 13, 'r');
     this.text(0, D, L.COL1_R, L.GRID_LABEL_BASE, this.run('AVG', SANS_SEMI, 16, LABEL, 0.06), 16, 'r');
     this.text(0, D, L.COL2_R, L.GRID_LABEL_BASE, this.run('1% LOW', SANS_SEMI, 16, LABEL, 0.06), 16, 'r');
-    ['RUN AVG', '1% LOW', '0.1% LOW', 'MISSED'].forEach((s, i) => {
+    ['RUN AVG', '1% LOW', '0.1% LOW', 'MISSED', 'HITCHES'].forEach((s, i) => {
       this.text(0, D, L.RUN_COLS[i], L.RUN_LABEL_BASE, this.run(s, SANS_MED, 13, FOOT, 0.06), 13, 'r');
     });
     // Chart baselines, the target line and the frame-time grid, labelled at the left.
@@ -514,6 +557,11 @@ class Overlay {
     this.rects(0, D, [[PAD, L.FT_TOP + CHART_H - g2, IW, 1]], TEXT, 0.22, 3);
     this.chartLabelLeft(0, D, PAD, L.FT_TOP + CHART_H - g1 + 3, `${targetMs.toFixed(1)} ms`);
     this.chartLabelLeft(0, D, PAD, L.FT_TOP + CHART_H - g2 + 3, (2 * targetMs).toFixed(1));
+    // Below the refresh rate, a frame one refresh late (3 refreshes at 30 fps in 60 Hz) is the pacing line.
+    if (this.m.kRef > 1) {
+      const gl = CHART_H * (this.m.kRef + 1) / (3 * this.m.kRef);
+      this.rects(0, D, [[PAD, L.FT_TOP + CHART_H - gl, IW, 1]], AMBER, 0.35, 3);
+    }
     this.text(0, D, PAD, L.PACING_BASE, this.run('PACING · 10 S', SANS_SEMI, 16, LABEL, 0.06), 16);
     const n = a.droppedRefreshes || 0;
     const drops = n ? `${n} rec drop${n === 1 ? '' : 's'}` : 'no rec drops';
@@ -536,30 +584,44 @@ class Overlay {
       this.run(fmt1(n.avg), MONO_SEMI, 26, n.avg == null ? TEXT : levelColor(n.avg, target)), 26, 'r');
     this.text(tq, tEnd, L.COL2_R, L.GRID_VALUE_BASE,
       this.run(fmt1(n.low), MONO_SEMI, 26, n.low == null ? TEXT : levelColor(n.low, target)), 26, 'r');
-    const runVals = [fmt1(n.runAvg), fmt1(n.run1), fmt1(n.run01), n.missed == null ? '–' : `${Math.round(n.missed * 100)}%`];
-    runVals.forEach((s, i) => this.text(tq, tEnd, L.RUN_COLS[i], L.RUN_VALUE_BASE, this.run(s, MONO_SEMI, 20, TEXT), 20, 'r'));
+    const runVals = [fmt1(n.runAvg), fmt1(n.run1), fmt1(n.run01), n.missed == null ? '–' : `${Math.round(n.missed * 100)}%`, String(n.hitches)];
+    runVals.forEach((s, i) => this.text(tq, tEnd, L.RUN_COLS[i], L.RUN_VALUE_BASE, this.run(s, MONO_SEMI, 20, i === 4 && n.hitches ? RED : TEXT), 20, 'r'));
     // FPS chart: 40 slices, time-weighted.
     const bw = (IW - (FPS_BARS - 1) * 2) / FPS_BARS;
-    const groups = new Map([[BLUE, []], [AMBER, []], [RED, []]]);
-    const tris = [];
+    const groups = new Map([[BLUE, []], [AMBER, []], [RED, []], [FOOT, []]]);
+    const tris = [], hitchTris = [];
     for (const b of n.bars) {
       const h = Math.max(2.0, Math.min(1.0, b.fps / yMax) * CHART_H);
       const x = PAD + b.j * (bw + 2);
-      groups.get(barColor(b.fps, target)).push([x, L.FPS_TOP + CHART_H - h, bw, h]);
+      groups.get(b.paused ? FOOT : barColor(b.fps, target)).push([x, L.FPS_TOP + CHART_H - h, bw, h]);
       if (b.drop) tris.push(x + bw / 2 - 3.5);
+      else if (b.hitch) hitchTris.push(x + bw / 2 - 3.5);
     }
     for (const [col, rs] of groups) this.rects(tq, tEnd, rs, col, 1.0);
+    // Markers under the slices: a red triangle for a recorder drop, an amber one for a hitch.
     this.slot('drops', 2, tq, tris.length
       ? this.shapeBody(tris.map((x) => this.trianglePath(x, L.FPS_TOP + CHART_H + 8)).join(' '), RED, 1.0) : null);
+    this.slot('hitches', 2, tq, hitchTris.length
+      ? this.shapeBody(hitchTris.map((x) => this.trianglePath(x, L.FPS_TOP + CHART_H + 8)).join(' '), AMBER, 1.0) : null);
+    const flagged = n.dropsInWindow || n.tearsInWindow;
     const left = this.run('FPS · LAST 10 S', SANS_SEMI, 16, LABEL, 0.06) +
-      (n.dropsInWindow ? '' : this.run(' · ¼ S SLICES', SANS_MED, 13, FOOT, 0.04));
+      (flagged ? '' : this.run(' · ¼ S SLICES', SANS_MED, 13, FOOT, 0.04));
     this.slot('fpsLabelL', 3, tq, this.textBody(PAD, L.FPS_LABEL_BASE, left, 16));
     this.text(tq, tEnd, PW - PAD, L.FPS_LABEL_BASE,
       (n.dropsInWindow ? this.run('REC DROP · ', SANS_SEMI, 16, RED, 0.06) : '') +
+      (n.tearsInWindow ? this.run('TEAR · ', SANS_SEMI, 16, RED, 0.06) : '') +
       this.run('MIN ', SANS_SEMI, 16, LABEL, 0.06) + this.run(fmt0(n.mn), MONO_SEMI, 16, TEXT) +
       this.run(' · MAX ', SANS_SEMI, 16, LABEL, 0.06) + this.run(fmt0(n.mx), MONO_SEMI, 16, TEXT), 16, 'r');
-    // Pacing: shares of frames on time, one target frame late, and longer.
-    if (n.pacing) {
+    // Pacing: below the refresh rate, the share of frames that held exactly the cap's
+    // refreshes; at the refresh rate, shares of frames on time, one frame late, and longer.
+    if (n.cadence) {
+      const c = n.cadence, share = (v) => v / c.n, evenPct = Math.round(share(c.even) * 100);
+      this.text(tq, tEnd, PW - PAD, L.PACING_BASE,
+        this.run('EVEN ', SANS_MED, 13, FOOT, 0.04) +
+        this.run(`${evenPct}%`, MONO_SEMI, 13, evenPct >= 95 ? TEXT : evenPct >= 80 ? AMBER : RED), 13, 'r');
+      this.stackedBar(tq, tEnd, [[share(c.short), AMBER, 'SHORT'], [share(c.even), BLUE, `${fmtMs(kRef * refreshMs)} ms`],
+        [share(c.late), AMBER, 'LATE'], [share(c.stall), RED, 'STALL']]);
+    } else if (n.pacing) {
       const p = n.pacing, ms = (c) => fmtMs(c * refreshMs);
       const labOn = kRef === 1 ? `${ms(1)} ms` : `≤${ms(kRef)} ms`;
       const labLate = kRef === 1 ? `${ms(2)} ms` : `${ms(kRef + 1)}–${ms(2 * kRef)} ms`;
@@ -582,8 +644,10 @@ class Overlay {
       this.run('LAST FRAME  ', SANS_SEMI, 16, LABEL, 0.06) +
       this.run(fmt1(f.lastMs), MONO_SEMI, 20, f.lastMs == null ? TEXT : ftTextColor(f.lastMs, targetMs)) +
       this.run(' ms', MONO_SEMI, 13, DIM), 20));
+    const hot = f.stallKind === 'hitch', badge = HOLD_NAMES[f.kind] || 'STALL';
+    const held = f.elapsed < 1000 ? `${f.elapsed.toFixed(0)} ms` : `${(f.elapsed / 1000).toFixed(1)} s`;
     this.slot('stall', 3, tt, f.stalled ? this.textBody(PW - PAD, L.LAST_BASE,
-      this.run('STALL  ', SANS_SEMI, 16, RED, 0.06) + this.run(`${f.elapsed.toFixed(0)} ms`, MONO_SEMI, 20, RED), 20, 'r') : null);
+      this.run(`${badge}  `, SANS_SEMI, 16, hot ? RED : DIM, 0.06) + this.run(held, MONO_SEMI, 20, hot ? RED : DIM), 20, 'r') : null);
     this.ftChart(tt, f, { key: 'ft', x: PAD, top: L.FT_TOP, w: IW, h: CHART_H, slots: FT_SHOW + 1 });
     const shownFrames = f.last.length + 1;
     this.slot('ftLabelL', 3, tt, this.textBody(PAD, L.FT_LABEL_BASE,
@@ -632,10 +696,10 @@ class Overlay {
     const g = this.lg, { targetMs } = this.m, scale = 3 * targetMs;
     const wl = Math.min(g.iw, Math.max(1, f.elapsed / 1000 * g.speed));
     const hl = Math.max(2.0, Math.min(1.0, f.elapsed / scale) * LG_CH);
-    this.liveBar(tt, g.rx + LG_PAD + g.iw - wl, wl + 2, hl, f.stalled, g.ry + LG_TOP + LG_CH, 'lgLive');
-    const { frameMs } = this.a, ends = this.ends;
-    let mx = f.stalled ? f.elapsed : 0;
-    for (let i = bisectRight(ends, tt - LG_WIN), hi = bisectRight(ends, tt); i < hi; i++) if (frameMs[i] > mx) mx = frameMs[i];
+    this.liveBar(tt, g.rx + LG_PAD + g.iw - wl, wl + 2, hl, f.stallKind, g.ry + LG_TOP + LG_CH, 'lgLive');
+    const { frameMs, kind } = this.a, ends = this.ends;
+    let mx = f.stallKind === 'hitch' ? f.elapsed : 0;
+    for (let i = bisectRight(ends, tt - LG_WIN), hi = bisectRight(ends, tt); i < hi; i++) if (isPlay(kind[i]) && frameMs[i] > mx) mx = frameMs[i];
     this.slot('lgMax', 3, tt, mx ? this.textBody(g.rx + g.GW - LG_PAD, g.ry + 22,
       this.run('MAX ', SANS_SEMI, 16, LABEL, 0.06) + this.run(fmt1(mx), MONO_SEMI, 16, ftTextColor(mx, targetMs)) +
       this.run(' ms', MONO_SEMI, 13, DIM), 16, 'r') : null);
@@ -645,7 +709,7 @@ class Overlay {
    * ends and glides left at the window's speed, clipped to the chart. */
   drawLongGraphBars(D) {
     const g = this.lg, { targetMs } = this.m, scale = 3 * targetMs, px = (v) => this.px(v);
-    const { frameMs } = this.a, ends = this.ends;
+    const { frameMs, kind } = this.a, ends = this.ends;
     const clip = `\\clip(${Math.floor(px(g.x0))},${Math.floor(px(g.top))},${Math.ceil(px(g.x0 + g.iw))},${Math.ceil(px(g.top + LG_CH + 1))})`;
     const move = (x1, y) => `\\move(${f1(px(x1))},${f1(px(y))},${f1(px(x1 - g.speed * LG_WIN))},${f1(px(y))},0,${LG_WIN * 1000})`;
     for (let i = 0; i < frameMs.length; i++) {
@@ -654,9 +718,10 @@ class Overlay {
       const ms = frameMs[i], t1 = Math.min(D, e + LG_WIN);
       const w = Math.max(1, ms / 1000 * g.speed - 1), h = Math.max(2.0, Math.min(1.0, ms / scale) * LG_CH);
       const x1 = g.x0 + g.iw - w, y = g.top + LG_CH - h;
-      this.emit(2, e, t1, `{\\an7${move(x1, y)}${clip}\\shad0\\p1\\bord0\\c${assColor(ftBarColor(ms, targetMs))}}` +
+      const play = isPlay(kind[i]);
+      this.emit(2, e, t1, `{\\an7${move(x1, y)}${clip}\\shad0\\p1\\bord0\\c${assColor(play ? ftBarColor(ms, targetMs) : FOOT)}}` +
         rectsPath([[0, 0, px(w), px(h)]]) + '{\\p0}');
-      if (ms > scale * 1.001) { // value box to the left of the bar, moving with it
+      if (ms > scale * 1.001 && play) { // value box to the left of the bar, moving with it
         const s = ms.toFixed(0), size = 13, lw = monoW(s, size) + 8, lh = 17, lx = x1 - 2 - lw, ly = g.top + 2;
         this.emit(3, e, t1, `{\\an7${move(lx, ly)}${clip}\\shad0\\p1\\bord0\\c${assColor(PANEL)}\\1a&H24&}` +
           roundedPath(0, 0, px(lw), px(lh), px(2)) + '{\\p0}');
@@ -665,8 +730,68 @@ class Overlay {
     }
   }
 
-  /** Run every pass; the events end up in this.lines. */
+  /** A red line across the video where each tear was, fading out. */
+  drawTears(D) {
+    for (const t of this.a.tears) {
+      if (t.time >= D) break;
+      const y = Math.round(t.y * this.h);
+      this.emit(5, t.time, Math.min(D, t.time + TEAR_SHOW_S),
+        `{\\an7\\pos(0,0)\\fad(0,${Math.round(TEAR_SHOW_S * 750)})\\shad0\\p1\\bord0\\c${assColor(RED)}}` +
+        rectsPath([[0, y - 1, this.w, this.px(2)]]) + '{\\p0}');
+    }
+  }
+
+  /** The results after the clip: the run's numbers and a frame-time histogram over a dimmed frame. */
+  drawEndCard(D) {
+    const s = summarise(this.a, this.capture), { refreshMs, kRef, targetMs } = this.m;
+    const t0 = D, t1 = D + END_CARD_S, frameW = this.w / this.k;
+    const W = 760, H = 540, x0 = (frameW - W) / 2, y0 = (1080 - H) / 2;
+    const { ox, oy } = this, X = (v) => x0 - ox + v, Y = (v) => y0 - oy + v; // panel-px helpers draw from the panel origin
+    this.emit(0, t0, t1, this.shapeBody(rectsPath([[0, 0, this.w, this.h]]), PANEL, 0.78));
+    this.shape(t0, t1, roundedPath(this.px(x0), this.px(y0), this.px(W), this.px(H), this.px(14)), PANEL, 1.0, 1, LINE, 0.96);
+    this.text(t0, t1, X(32), Y(44), this.run(this.fitTitle(W - 64 - 160, 20, 0.06), SANS_SEMI, 20, TEXT, 0.06), 20);
+    this.text(t0, t1, X(W - 32), Y(44), this.run(`${this.capture.height}P${Math.round(this.a.hz)} · TARGET ${this.a.target}`, MONO_MED, 13, DIM), 13, 'r');
+    const fps = (v) => fmt1(v), pct = (v) => (v == null ? '–' : `${Math.round(v)}%`);
+    const cells = [
+      ['AVG FPS', fps(s.avg_fps), levelColor(s.avg_fps, s.target_fps)],
+      ['1% LOW', fps(s.low_1pct_fps), levelColor(s.low_1pct_fps, s.target_fps)],
+      ['0.1% LOW', fps(s.low_0_1pct_fps), levelColor(s.low_0_1pct_fps, s.target_fps)],
+      ['MISSED', pct(s.frames_missing_target_pct), TEXT],
+      ['PACING EVEN', pct(s.pacing.even_pct), s.pacing.even_pct == null ? TEXT : s.pacing.even_pct >= 95 ? TEXT : s.pacing.even_pct >= 80 ? AMBER : RED],
+      ['STUTTER TIME', `${s.stutter_time_pct.toFixed(1)}%`, s.stutter_time_pct > 5 ? RED : s.stutter_time_pct > 1 ? AMBER : TEXT],
+      ['HITCHES', String(s.hitches.count), s.hitches.count ? RED : TEXT],
+      ['TEARS', String(s.tears.count), s.tears.count ? RED : TEXT],
+    ];
+    const colW = (W - 64) / 4;
+    cells.forEach(([label, value, color], i) => {
+      const cx = X(32 + (i % 4) * colW), cy = Y(96 + Math.floor(i / 4) * 92);
+      this.text(t0, t1, cx, cy, this.run(label, SANS_MED, 13, FOOT, 0.06), 13);
+      this.text(t0, t1, cx, cy + 44, this.run(value, MONO_SEMI, 40, color, -0.02), 40);
+    });
+    // Histogram: play frames by refreshes held, 1 to 11 and 12+, coloured against the cap.
+    const bins = new Array(12).fill(0);
+    let total = 0;
+    this.a.holdRefreshes.forEach((n, i) => { if (isPlay(this.a.kind[i])) { bins[Math.min(11, Math.max(1, n)) - 1]++; total++; } });
+    const hx = X(32), hy = Y(316), hw = W - 64, hh = 150, bw = (hw - 11 * 6) / 12;
+    this.text(t0, t1, hx, hy - 10, this.run('FRAME TIME', SANS_SEMI, 16, LABEL, 0.06) +
+      this.run(` · ${total} FRAMES BY REFRESHES HELD`, SANS_MED, 13, FOOT, 0.04), 16);
+    const peak = Math.max(1, ...bins);
+    bins.forEach((c, i) => {
+      const n = i + 1, h = Math.max(2, c / peak * hh * 0.85), bx = hx + i * (bw + 6); // room for the share label above the tallest bar
+      this.rects(t0, t1, [[bx, hy + hh - h, bw, h]], ftBarColor(n * refreshMs, targetMs), 1.0);
+      const lab = n === 12 ? `${fmtMs(12 * refreshMs)}+` : fmtMs(n * refreshMs);
+      this.text(t0, t1, bx + bw / 2, hy + hh + 18, this.run(lab, MONO_MED, 11, n === kRef ? TEXT : FOOT), 11, 'c');
+      if (c) this.text(t0, t1, bx + bw / 2, hy + hh - h - 4, this.run(`${Math.round(100 * c / total)}%`, MONO_MED, 11, LABEL), 11, 'c');
+    });
+    const left = [s.static_holds.seconds && `${s.static_holds.seconds.toFixed(1)} S STILL`, s.loading.seconds && `${s.loading.seconds.toFixed(1)} S LOADING`]
+      .filter(Boolean).join(' · ');
+    this.text(t0, t1, X(32), Y(H - 20), this.run(`${s.seconds.toFixed(1)} S OF PLAY${left ? ` · ${left} LEFT OUT` : ''}`, SANS, 13, FOOT), 13);
+  }
+
+  /** Run every pass; the events end up in this.lines. Running it again is free. */
   render() {
+    if (this.rendered) return;
+    this.rendered = true;
     const a = this.a;
     const target = a.target, targetMs = 1000.0 / target;
     const refreshMs = a.hz ? 1000.0 / a.hz : targetMs;
@@ -678,10 +803,17 @@ class Overlay {
       yMax: Math.max(target, Math.min(1.25 * target, a.hz || 1.25 * target)),
     };
     if (!Array.isArray(a.droppedAt)) a.droppedAt = [];
+    if (!Array.isArray(a.kind)) a.kind = [];
+    if (!Array.isArray(a.holds)) a.holds = [];
+    if (!Array.isArray(a.tears)) a.tears = [];
     this.ends = a.starts.map((s, i) => s + a.frameMs[i] / 1000.0);
+    // When each hitch became known (its frame ended), and when each tear was.
+    this.hitchAt = a.holds.filter((h) => h.kind === 'hitch').map((h) => h.start + h.ms / 1000).sort((x, y) => x - y);
+    this.tearAt = a.tears.map((t) => t.time);
     this.sortedDone = [];
     this.doneCount = 0;
     this.missedCount = 0;
+    this.pausedS = 0;
     this.lines = [];
     this.slots = new Map();
 
@@ -694,6 +826,8 @@ class Overlay {
     for (let u = 0; u < nTick; u++) this.drawFrame(u / this.rate, Math.min(D, (u + 1) / this.rate));
     this.flushSlots(D);
     if (this.lg) this.drawLongGraphBars(D);
+    this.drawTears(D);
+    if (this.opts.endCard) this.drawEndCard(D);
   }
 
   /** The whole subtitle as text. Fine for clips of minutes; long clips go through writeTo(). */
@@ -804,6 +938,8 @@ class StripOverlay extends Overlay {
 
   drawFrame(tt, tEnd) {
     const f = this.frameAt(tt), S = STRIP, { targetMs } = this.m;
+    this.slot('badge', 3, tt, f.stalled ? this.textBody(S.stats + 3 * S.col, 31,
+      this.run(HOLD_NAMES[f.kind] || 'STALL', SANS_SEMI, 11, f.stallKind === 'hitch' ? RED : DIM, 0.06), 11) : null);
     const ms = (v) => this.run(fmt1(v), MONO_SEMI, 22, v == null ? TEXT : ftTextColor(v, targetMs)) + this.run(' ms', MONO_SEMI, 11, DIM);
     this.slot('last', 3, tt, this.textBody(S.stats, 56, ms(f.lastMs), 22));
     this.slot('ftMax', 3, tt, this.textBody(S.stats + 3 * S.col, 56, ms(f.ftMax), 22));
@@ -914,7 +1050,7 @@ const POSITIONS = ['left', 'center', 'right'];
 const CAPTION_POSITIONS = ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'];
 
 module.exports = {
-  Overlay, StripOverlay, GlassOverlay, NoneOverlay, createOverlay, STYLES,
+  Overlay, StripOverlay, GlassOverlay, NoneOverlay, createOverlay, STYLES, END_CARD_S,
   assFilter, filterPath, assTime, assColor, tc, weightedFrames, POSITIONS, CAPTION_POSITIONS, LAYOUT,
   COLORS: Object.freeze({ PANEL, LINE, TEXT, LABEL, DIM, FOOT, BLUE, AMBER, RED }),
 };

@@ -114,30 +114,56 @@ for (const [target, counts] of LOCKED) {
     assert.equal(Number(textAt(events, t, LAYOUT.RUN_COLS[1], LAYOUT.RUN_VALUE_BASE, 20)), summary.low_1pct_fps);
     assert.equal(Number(textAt(events, t, LAYOUT.RUN_COLS[2], LAYOUT.RUN_VALUE_BASE, 20)), summary.low_0_1pct_fps);
     assert.equal(textAt(events, t, LAYOUT.RUN_COLS[3], LAYOUT.RUN_VALUE_BASE, 20), `${Math.round(summary.frames_missing_target_pct)}%`);
+    assert.equal(textAt(events, t, LAYOUT.RUN_COLS[4], LAYOUT.RUN_VALUE_BASE, 20), '0');
     assert.equal(textAt(events, t, LAYOUT.COL1_R, LAYOUT.GRID_VALUE_BASE, 26), `${target}.0`);
     assert.equal(textAt(events, t, LAYOUT.COL2_R, LAYOUT.GRID_VALUE_BASE, 26), `${target}.0`);
   });
 }
 
-test('a stall is shown while it happens, then as a labelled bar', () => {
-  const { a, events } = build([29, ...Array(354).fill(2)], 30); // 483 ms first frame, then 30 fps
-  for (const tick of [3, 9, 14]) { // 1/30 s ticks inside the stall
-    const t = Math.round((tick / 30) * 100) / 100;
+test('a hitch is shown while it happens, then as a labelled bar and counted', () => {
+  // 1 s at 30 fps, a 483 ms frame stuck in motion, then 30 fps again.
+  const { a, events } = build([...Array(30).fill(2), 29, ...Array(324).fill(2)], 30);
+  assert.equal(a.kind[30], 'hitch');
+  for (const tick of [3, 9, 14]) { // 1/30 s ticks inside the hitch
+    const t = Math.round((1 + tick / 30) * 100) / 100;
     const s = textAt(events, t, LAYOUT.COL2_R, LAYOUT.LAST_BASE, 20);
-    assert.match(s, /^STALL\s+\d+ ms$/);
-    assert.equal(Number(/(\d+) ms/.exec(s)[1]), Math.round((tick / 30) * 1000), `stall counter at ${t}`);
+    assert.match(s, /^HITCH\s+\d+ ms$/);
+    assert.equal(Number(/(\d+) ms/.exec(s)[1]), Math.round((tick / 30) * 1000), `hitch counter at ${t}`);
   }
   const Y = OY + LAYOUT.LAST_BASE + 0.275 * 20;
-  assert.equal(active(events, 0.6).filter((e) => e.pos && Math.abs(e.pos[0] - (OX + LAYOUT.COL2_R)) < 0.11 &&
-    Math.abs(e.pos[1] - Y) < 0.11).length, 0, 'no STALL once frames flow again');
-  assert.equal(textAt(events, 0.5, LAYOUT.PAD, LAYOUT.LAST_BASE, 20), 'LAST FRAME  483.3 ms');
-  const label = active(events, 1.0).filter((e) => e.plain === '483');
+  assert.equal(active(events, 1.6).filter((e) => e.pos && Math.abs(e.pos[0] - (OX + LAYOUT.COL2_R)) < 0.11 &&
+    Math.abs(e.pos[1] - Y) < 0.11).length, 0, 'no badge once frames flow again');
+  assert.equal(textAt(events, 1.5, LAYOUT.PAD, LAYOUT.LAST_BASE, 20), 'LAST FRAME  483.3 ms');
+  const label = active(events, 2.0).filter((e) => e.plain === '483');
   assert.equal(label.length, 1, 'overflow value printed');
   assert.ok(label[0].colors.includes(RED));
-  assert.match(textAt(events, 1.0, LAYOUT.COL2_R, LAYOUT.FT_LABEL_BASE, 16), /^MAX 483\.3 ms$/);
+  assert.match(textAt(events, 2.0, LAYOUT.COL2_R, LAYOUT.FT_LABEL_BASE, 16), /^MAX 483\.3 ms$/);
   const t = lastTick(a.duration) + 0.01;
   const runAvg = Number(textAt(events, t, LAYOUT.RUN_COLS[0], LAYOUT.RUN_VALUE_BASE, 20));
   assert.ok(Math.abs(runAvg - a.frameMs.length / a.duration) <= 0.15, `run avg ${runAvg}`);
+  assert.equal(textAt(events, t, LAYOUT.RUN_COLS[4], LAYOUT.RUN_VALUE_BASE, 20), '1');
+  // An amber marker under the slice where the hitch ended; no red REC DROP one.
+  const tris = active(events, 2.0).filter((e) => e.drawing && e.rects.length === 0 && / l /.test(e.text) && !/ b /.test(e.text));
+  assert.equal(tris.length, 1);
+  assert.ok(tris[0].colors.includes(AMBER));
+});
+
+test('a hold with no motion before it is a still: dim, not red, and left out of the numbers', () => {
+  const { a, events, summary } = build([29, ...Array(354).fill(2)], 30); // 483 ms first frame, then 30 fps
+  assert.equal(a.kind[0], 'static');
+  const s = textAt(events, 0.3, LAYOUT.COL2_R, LAYOUT.LAST_BASE, 20);
+  assert.match(s, /^STILL\s+\d+ ms$/);
+  assert.equal(active(events, 1.0).filter((e) => e.plain === '483').length, 0, 'no red value box for a still');
+  // The first ¼ s slice lies wholly inside the still: a dim stub, not a red 0 fps bar, and not the MIN.
+  const FOOT = assColor(COLORS.FOOT).slice(2);
+  const first = fpsBars(events, 1.0).sort((p, q) => p.x - q.x)[0];
+  assert.ok(first.colors.includes(FOOT) && !first.colors.includes(RED), `first slice colours ${first.colors}`);
+  assert.equal(textAt(events, 1.0, LAYOUT.COL2_R, LAYOUT.FPS_LABEL_BASE, 16), 'MIN 30 · MAX 30');
+  const t = lastTick(a.duration) + 0.01;
+  assert.equal(textAt(events, t, LAYOUT.RUN_COLS[0], LAYOUT.RUN_VALUE_BASE, 20), '30.0');
+  assert.equal(textAt(events, t, LAYOUT.RUN_COLS[4], LAYOUT.RUN_VALUE_BASE, 20), '0');
+  assert.equal(summary.static_holds.count, 1);
+  assert.equal(summary.avg_fps, 30);
 });
 
 test('recorder drops are flagged on the chart and in the footer', () => {
@@ -223,16 +249,16 @@ test('the strip and glass looks build cleanly and show the hero', () => {
 });
 
 test('the long graph scrolls one moving event per frame', () => {
-  const a = analyse(rowsFromCounts([29, ...Array(354).fill(2)]), HZ, 0.4, 30);
+  const a = analyse(rowsFromCounts([...Array(30).fill(2), 29, ...Array(324).fill(2)]), HZ, 0.4, 30);
   const ass = new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE,
     { longGraph: true, longGraphOpacity: 0.5, caption: 'Cap', captionPosition: 'bottom-center' }).build();
   const events = parse(ass);
   const moving = events.filter((e) => /\\move\(/.test(e.text));
-  // The last frame ends with the clip, so its bar never shows; the 483 ms frame adds a value box and its text.
+  // The last frame ends with the clip, so its bar never shows; the 483 ms hitch adds a value box and its text.
   assert.equal(moving.length, a.frameMs.length - 1 + 2);
   assert.ok(moving.every((e) => /\\clip\(/.test(e.text)), 'every moving event is clipped to the chart');
   const first = moving.find((e) => e.drawing && e.colors.includes(RED));
-  assert.ok(Math.abs(first.start - 29 / 60) < 0.011, 'the stall bar appears when that frame ends');
+  assert.ok(Math.abs(first.start - 89 / 60) < 0.011, 'the hitch bar appears when that frame ends');
   // Background at 50 %: the graph box is a layer-0 drawing with alpha 80.
   assert.ok(events.some((e) => e.layer === 0 && e.drawing && e.text.includes('\\1a&H80&')), 'graph background at 50 %');
   assert.deepEqual(events.find((e) => e.plain === 'Cap').pos, [960, 1080 - 24 - 116 - 16]);
@@ -240,11 +266,47 @@ test('the long graph scrolls one moving event per frame', () => {
   assert.ok(events.length <= 500 * a.duration + 100, `${events.length} events for ${a.duration} s`);
 });
 
-test('pacing shows the share of frames by length', () => {
+test('pacing shows how many frames held the cap exactly, and on-time shares at the refresh rate', () => {
   const { events } = build(Array(360).fill(2), 30);
-  assert.equal(active(events, 6.0).filter((e) => e.plain === '≤33.3 ms  100%').length, 1);
-  assert.equal(textAt(events, 6.0, LAYOUT.COL2_R, LAYOUT.PACING_BASE, 13), '≥83.3 ms 0%');
+  assert.equal(active(events, 6.0).filter((e) => e.plain === '33.3 ms  100%').length, 1);
+  assert.equal(textAt(events, 6.0, LAYOUT.COL2_R, LAYOUT.PACING_BASE, 13), 'EVEN 100%');
   assert.equal(textAt(events, 6.0, LAYOUT.COL2_R, LAYOUT.FOOT_BASE, 13), '0:06.00');
+  // 30 fps delivered as 1-3-1-3 refreshes: the average is 30, the pacing is not.
+  const uneven = build(Array.from({ length: 360 }, (_, i) => (i % 2 ? 3 : 1)), 30);
+  assert.equal(uneven.summary.avg_fps, 30);
+  assert.equal(uneven.summary.pacing.even_pct, 0);
+  assert.equal(textAt(uneven.events, 6.0, LAYOUT.COL2_R, LAYOUT.PACING_BASE, 13), 'EVEN 0%');
+  assert.equal(textAt(uneven.events, 6.0, LAYOUT.COL1_R, LAYOUT.GRID_VALUE_BASE, 26), '30.0');
+  // At the refresh rate every frame is one refresh: the on-time bar stays.
+  const sixty = build(Array(720).fill(1), 60);
+  assert.equal(active(sixty.events, 6.0).filter((e) => e.plain === '16.7 ms  100%').length, 1);
+});
+
+test('a tear draws a fading line across the video where it was, and flags the FPS row', () => {
+  const a = analyse(rowsFromCounts(Array(720).fill(1)), HZ, 0.4, 60);
+  a.tears = [{ time: 3, y: 0.5 }];
+  const events = parse(new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE).build());
+  const line = events.filter((e) => e.layer === 5);
+  assert.equal(line.length, 1);
+  assert.ok(Math.abs(line[0].start - 3) < 0.011 && Math.abs(line[0].end - 3.4) < 0.011);
+  assert.ok(line[0].text.includes('\\fad(0,300)') && line[0].colors.includes(RED));
+  assert.deepEqual([line[0].rects[0].x, line[0].rects[0].y, line[0].rects[0].w], [0, 539, 1920]);
+  assert.equal(textAt(events, 3.25, LAYOUT.COL2_R, LAYOUT.FPS_LABEL_BASE, 16), 'TEAR · MIN 60 · MAX 60');
+  assert.equal(textAt(events, 2.75, LAYOUT.COL2_R, LAYOUT.FPS_LABEL_BASE, 16), 'MIN 60 · MAX 60');
+});
+
+test('the end card holds the results over the last frame for 4 s', () => {
+  const a = analyse(rowsFromCounts([...Array(30).fill(2), 29, ...Array(324).fill(2)]), HZ, 0.4, 30);
+  const s = summarise(a, SIZE);
+  const events = parse(new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE, { endCard: true }).build());
+  const card = events.filter((e) => e.start >= a.duration - 0.011);
+  assert.ok(card.length > 30, `${card.length} card events`);
+  assert.ok(card.every((e) => Math.abs(e.end - (a.duration + 4)) < 0.011), 'all end 4 s after the clip');
+  const plain = card.map((e) => e.plain);
+  for (const s of ['AVG FPS', '1% LOW', 'PACING EVEN', 'STUTTER TIME', 'HITCHES', 'TEARS']) assert.ok(plain.includes(s), s);
+  assert.ok(plain.some((p) => p.startsWith('FRAME TIME · ')), 'histogram title');
+  assert.ok(plain.includes(s.avg_fps.toFixed(1)) && plain.includes(String(s.hitches.count)) && plain.includes(`${Math.round(s.pacing.even_pct)}%`));
+  assert.ok(!events.some((e) => e.start < a.duration - 0.011 && e.end > a.duration + 0.011), 'nothing else runs into the card');
 });
 
 test('the subtitle file is well formed and bounded', () => {

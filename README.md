@@ -92,15 +92,43 @@ Unsigned builds work but Windows SmartScreen warns on first run.
 
 Every captured refresh is compared with the one before it on a 640-pixel-wide
 grey copy. A refresh is a new game frame when the mean difference is above
-the threshold (Otsu's split of the two groups, or the value set by hand), or
-when any one spot of the picture changed by 64 levels or more out of 255. The
-peak test catches calm scenes: a character moving against a still background
-averages to almost nothing, while a truly repeated frame only carries faint,
-evenly spread encoder noise, which never peaks. Record at high quality (NVENC
-CQP 20 or better, x264 CRF 18 or better): at x264 CRF 23 a repeat re-encoded
-at a keyframe can read as a new frame. A screen that does not change at all,
-such as a pause menu or a fade, cannot be measured from a recording; frames
-the game presented without changing a pixel appear as one long frame.
+the threshold (Otsu's split of the two groups, or the value set by hand) and
+its peak is at least 40 levels out of 255, or when any one spot of the
+picture changed by 64 levels or more. The peak test catches calm scenes: a
+character moving against a still background averages to almost nothing,
+while a truly repeated frame only carries faint, evenly spread encoder noise,
+which never peaks. The minimum peak catches the opposite case: a repeat
+re-encoded at a keyframe shifts the mean a little but peaks like noise.
+Record at high quality (NVENC CQP 20 or better, x264 CRF 18 or better).
+
+The same decode pass keeps each refresh's brightness and a 4 × 16 grid of
+where it changed, which gives three more readings:
+
+- **Holds**: a frame on screen for 2.5 target frames or longer. A black
+  screen is **loading**; a hold after a calm scene (the last six frames
+  barely changed) is **still**, such as a menu, a map or a held shot; any
+  other is a **hitch**. Still and loading time is left out of the average,
+  the lows and the missed count, which describe play; `summary.json` keeps
+  the whole-run numbers under `all_frames`.
+- **Pacing**: how many frames held exactly the target's share of refreshes
+  (2 at 30 fps in 60 Hz, 3 at 40 fps in 120 Hz). A 30 fps game that
+  alternates 1 and 3 refreshes runs at 30 fps and reads as 0 % even. The
+  **stutter time** is the share of play spent in frames longer than 2.5 ×
+  the average frame time (as CapFrameX defines it).
+- **Tears**: a refresh that changed across its width in one part of the
+  picture while a run of bands at the top or bottom stayed as it was, and
+  whose still part then changes on the next refresh. Bands that are still on
+  most frames (a HUD, letterbox bars) are ignored. Tears are only visible
+  when the game runs below the refresh rate with motion on screen.
+
+The target is inferred from the frames in play, or set by hand; the choices
+are the capture's refresh rate and its integer fractions down to 20 fps, so
+a 120 Hz capture offers 24, 30, 40, 60 and 120. A 40 fps mode must be
+recorded at 120 Hz: in a 60 Hz capture it alternates 1 and 2 refreshes.
+
+These readings are checked against clips ffmpeg generates with a known
+cadence (`npm test`): locked 20, 30, 40 and 60 fps, a 24 fps 2-3 cadence,
+a torn second of a camera pan, a black second and a still second.
 
 ## Overlay
 
@@ -116,25 +144,47 @@ shows, from the top:
   rate at the 99th-percentile frame time, computed as on the results page
   (`–` until the window holds 20 frames).
 - **LAST FRAME**: how long the last completed frame stayed on screen. While
-  the frame on screen has lasted at least max(100 ms, 3 target frames), a red
-  **STALL** counter shows how long it has been there.
-- **RUN AVG · 1% LOW · 0.1% LOW · MISSED**: the run so far (frames ÷ time,
-  interpolated percentiles, share of frames longer than the target). They
-  match `summary.json` at the last tick.
+  the frame on screen has lasted at least max(100 ms, 3 target frames), a
+  counter shows how long: a red **HITCH** when motion stuck, a dim **STILL**
+  or **LOADING** for a menu, a held shot or a black screen. Still and loading
+  time is left out of every number on the panel, as on the results page.
+- **RUN AVG · 1% LOW · 0.1% LOW · MISSED · HITCHES**: the run so far (play
+  frames ÷ play time, interpolated percentiles, share of frames longer than
+  the target, hitches so far). They match `summary.json` at the last tick.
 - **FPS · LAST 10 S**: forty ¼ s slices, time-weighted, with their MIN and
   MAX; the scale tops out at the capture's refresh rate. A red ▲ under a
-  slice and `REC DROP` mark refreshes the recorder dropped.
+  slice and `REC DROP` mark refreshes the recorder dropped; an amber ▲ marks
+  a hitch; `TEAR` appears while a tear was seen in the window, and a red line
+  crosses the video where each tear was.
 - **FRAME TIME**: the last 89 completed frames plus an outlined bar for the
-  frame on screen (red when stalled). The scale is three target frames;
-  taller bars print their value. MAX is over the frames drawn.
-- **PACING · 10 S**: the share of frames that took one target frame, up to
-  two, or longer.
+  frame on screen (red during a hitch, dim during a still or a load, as are
+  their bars). The scale is three target frames; taller bars print their
+  value. An amber line marks one refresh late (50 ms at 30 fps in 60 Hz).
+- **PACING · 10 S**: below the refresh rate, the share of frames that held
+  exactly the cap's refreshes (blue), fewer (amber `SHORT`), up to twice as
+  many (amber `LATE`) or longer (red), with `EVEN n%`; at the refresh rate,
+  the share of frames on time, one frame late, or longer.
 - Footer: the threshold that split new frames from repeats and how it was
   chosen, dropped refreshes, and a timecode.
+- **End card** (`--end-card`, or the End card switch under Look): the last
+  frame is held for 4 s under the run's average, lows, missed share, pacing,
+  stutter time, hitches and tears, and a histogram of frames by refreshes
+  held.
 
 Numbers update every 250 ms; the frame-time chart, the stall counter and the
 timecode every 1/30 s (`--overlay-rate`, 1–100, trades that smoothness for
 subtitle size; `overlay.ass` is roughly 0.2 MB per second of video).
+
+## Comparing videos
+
+**Compare videos…** in the results menu (or `--compare a_fps.mp4 b_fps.mp4` on
+the command line) stacks two to four rendered videos into one: side by side,
+stacked, or in a grid. Each video starts at its own offset so the clips line
+up (`--offsets 0,1.5`), a label is drawn over each pane (`--labels "PS5,PS5
+Pro"`; an empty label draws none), and the sound is the first video's. The
+panes share one height side by side and one width stacked; the output ends
+with the shortest pane. The output goes next to the first video as
+`<a>_vs_<b>_compare.mp4` unless `--out` says otherwise.
 
 ## Speed
 
@@ -150,8 +200,10 @@ On a 30 s 1080p60 clip: about 53 s before these changes, 31 s now on the
 CPU, 13 s on the GPU. Results tell you how long each step took.
 
 Output goes to `<video name>_fps` next to the recording unless you change it:
-`summary.json`, `frames.csv`, `per_second.csv`, `refreshes.csv`,
-`overlay.ass` and `<video name>_fps.mp4`.
+`summary.json`, `frames.csv` (with each frame's hold in refreshes and kind:
+ok, hitch, static or loading), `per_second.csv`, `refreshes.csv` (with each
+refresh's brightness and the tear boundary if any), `overlay.ass` and
+`<video name>_fps.mp4`.
 
 ## Command line
 

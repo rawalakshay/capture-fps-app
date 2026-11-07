@@ -6,8 +6,8 @@
 const fs = require('fs');
 const path = require('path');
 const { probe, runFfmpeg, seekArgs, spanArgs, gpuStatus, abortError } = require('./ffmpeg');
-const { measureDiffs, analyse, summarise, writeCsvs, perSecondFps } = require('./analysis');
-const { createOverlay, assFilter, filterPath } = require('./overlay');
+const { measureDiffs, analyse, summarise, writeCsvs, perSecondFps, targetsFor } = require('./analysis');
+const { createOverlay, assFilter, filterPath, END_CARD_S } = require('./overlay');
 
 const FONTS_DIR = path.join(__dirname, '..', '..', 'assets', 'fonts');
 // How the picture is enlarged when the output is bigger than the recording:
@@ -62,6 +62,9 @@ async function analyseVideo(opts, { onProgress = () => {}, signal } = {}) {
   fs.mkdirSync(outDir, { recursive: true });
 
   const info = await probe(video);
+  if (opts.target && !targetsFor(info.hz).includes(opts.target)) {
+    throw new Error(`A ${Math.round(info.hz)} Hz recording can carry a target of ${targetsFor(info.hz).join(', ')} fps, not ${opts.target}`);
+  }
   const span = Math.max(0.001, (end || info.duration) - (start || 0));
   const t0 = Date.now();
   onProgress({ phase: 'measure', fraction: 0 });
@@ -92,13 +95,20 @@ async function analyseVideo(opts, { onProgress = () => {}, signal } = {}) {
  * is scaled; its format pill names the recording, not the output. */
 function overlayFor(an, opts, size) {
   const title = opts.title || path.parse(an.video).name;
-  return createOverlay(an.a, size, title, opts.overlayRate || 30, opts.position || 'right', an.info, opts);
+  // The built overlay is kept on the analysis: a preview scrub with the same
+  // options must not lay out the whole clip again.
+  const key = JSON.stringify([title, opts, size]);
+  if (!an.overlayCache || an.overlayCache.key !== key) {
+    an.overlayCache = { key, ov: createOverlay(an.a, size, title, opts.overlayRate || 30, opts.position || 'right', an.info, opts) };
+  }
+  return an.overlayCache.ov;
 }
 
 /** The ass filter with the bundled fonts, after the chosen upscale when the output is bigger. */
-function overlayFilter(assName, outDir, size, upscaler = 'lanczos') {
+function overlayFilter(assName, outDir, size, upscaler = 'lanczos', endCard = false) {
   const fonts = fs.existsSync(FONTS_DIR) ? FONTS_DIR : null;
-  let up = '';
+  // The end card is drawn over the last frame, held for its length.
+  let up = endCard ? `tpad=stop_mode=clone:stop_duration=${END_CARD_S},` : '';
   if (size.scaled) {
     const { width: w, height: h } = size;
     up = upscaler === 'fsrcnnx'
@@ -141,7 +151,7 @@ async function previewFrame(an, opts = {}, at = 0, { signal } = {}) {
  *         quality = 'standard', resolution = 'source' | '1080' | '1440' | '2160',
  *         overlayRate = 30, hwDecode?, showTarget = true, showFormat = true,
  *         caption?, captionPosition = 'top-left', watermark?,
- *         style = 'panel' | 'strip' | 'glass', longGraph = false, longGraphOpacity = 0.86,
+ *         style = 'panel' | 'strip' | 'glass', longGraph = false, longGraphOpacity = 0.86, endCard = false,
  *         upscaler = 'lanczos' | 'sharp' | 'fsrcnnx' (only when resolution is above the recording) }
  * onProgress({ phase: 'overlay'|'render', fraction })
  */
@@ -155,6 +165,7 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
   }
   onProgress({ phase: 'overlay', fraction: 0 });
   overlayFor(an, opts, size).writeTo(path.join(outDir, 'overlay.ass'));
+  delete an.overlayCache; // on disk now; an hour of events must not sit in memory for the rest of the session
   if (signal && signal.aborted) throw abortError();
 
   const q = QUALITY[opts.quality] || QUALITY.standard;
@@ -169,14 +180,17 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
   const dst = path.join(outDir, `${path.parse(video).name}_fps.mp4`);
   const part = `${dst}.part.mp4`; // the previous video is only replaced once this one is complete
   const span = Math.max(0.001, (end || info.duration) - (start || 0));
+  // With an end card the span cuts the input, not the output: an output -t
+  // would cut the padded card off with it.
+  const cut = spanArgs(start, end), inCut = Boolean(opts.endCard);
 
   const t0 = Date.now();
   onProgress({ phase: 'render', fraction: 0 });
   try {
     await runFfmpeg([
-      '-y', ...up.args, ...(hw ? ['-hwaccel', 'cuda'] : []), ...seekArgs(start), '-i', video, ...spanArgs(start, end),
+      '-y', ...up.args, ...(hw ? ['-hwaccel', 'cuda'] : []), ...seekArgs(start), ...(inCut ? cut : []), '-i', video, ...(inCut ? [] : cut),
       '-map', '0:v:0', '-map', '0:a:0?',
-      '-vf', overlayFilter('overlay.ass', outDir, size, up.upscaler),
+      '-vf', overlayFilter('overlay.ass', outDir, size, up.upscaler, Boolean(opts.endCard)),
       ...video_, '-pix_fmt', 'yuv420p', ...audio, part, // absolute: a name starting with "-" would read as an option
     ], {
       cwd: outDir, signal,
@@ -196,6 +210,110 @@ async function renderOverlay(an, opts = {}, { onProgress = () => {}, signal } = 
     path: dst, seconds: (Date.now() - t0) / 1000, encoder, hwDecode: hw,
     width: size.width, height: size.height,
   };
+}
+
+// ---- comparison: two to four rendered videos side by side ----
+
+const LAYOUTS = ['h', 'v', 'grid'];
+const LABEL_FONT = path.join(FONTS_DIR, 'IBMPlexSansCondensed-SemiBold.ttf');
+
+/** A pane label as a drawtext filter: the text comes from a file, so nothing needs escaping. */
+function labelFilter(textFile, paneH, outDir) {
+  return `drawtext=fontfile=${filterPath(LABEL_FONT, outDir)}:textfile=${filterPath(textFile, outDir)}:expansion=none` +
+    `:fontsize=${Math.round(paneH * 0.045)}:fontcolor=white:borderw=${Math.max(1, Math.round(paneH / 400))}:bordercolor=black@0.8` +
+    ':x=(w-text_w)/2:y=24';
+}
+
+/**
+ * The filter graph that scales each input to a common pane size and stacks the
+ * panes: side by side ('h'), stacked ('v') or in a grid. labelFiles[i] (a path or
+ * null) names the pane. Returns { graph, width, height }.
+ */
+function compareGraph(infos, layout, labelFiles = [], outDir = '.') {
+  const n = infos.length;
+  const even = (v) => Math.round(v / 2) * 2;
+  const minH = Math.min(...infos.map((i) => i.height)), minW = Math.min(...infos.map((i) => i.width));
+  const cols = layout === 'grid' ? Math.ceil(Math.sqrt(n)) : layout === 'h' ? n : 1;
+  const rows = Math.ceil(n / cols);
+  // Panes share a height side by side, a width stacked, both in a grid.
+  const panes = infos.map((i) => layout === 'h' ? { w: even(i.width * minH / i.height), h: minH }
+    : layout === 'v' ? { w: minW, h: even(i.height * minW / i.width) } : { w: minW, h: minH });
+  const chains = panes.map((p, i) => `[${i}:v]scale=${p.w}:${p.h}:flags=lanczos` +
+    (labelFiles[i] ? `,${labelFilter(labelFiles[i], p.h, outDir)}` : '') + `[p${i}]`);
+  const ins = panes.map((_, i) => `[p${i}]`).join('');
+  let stack, width, height;
+  if (layout === 'grid') {
+    const pos = panes.map((_, i) => `${(i % cols) * minW}_${Math.floor(i / cols) * minH}`).join('|');
+    stack = `xstack=inputs=${n}:layout=${pos}:fill=black:shortest=1`;
+    width = cols * minW; height = rows * minH;
+  } else if (layout === 'v') {
+    stack = `vstack=inputs=${n}:shortest=1`;
+    width = minW; height = panes.reduce((s, p) => s + p.h, 0);
+  } else {
+    stack = `hstack=inputs=${n}:shortest=1`;
+    width = panes.reduce((s, p) => s + p.w, 0); height = minH;
+  }
+  return { graph: `${chains.join(';')};${ins}${stack}[v]`, width, height };
+}
+
+/**
+ * Stack rendered videos into one, each started at its own offset so the clips
+ * line up, with a label over each pane. The audio is the first input's.
+ * opts: { inputs: [{ file, offset = 0, label = file name }], layout = 'h' | 'v' | 'grid',
+ *         out?, encoder, quality, hwDecode? }
+ * onProgress({ phase: 'compare', fraction })
+ */
+async function compareVideos(opts, { onProgress = () => {}, signal } = {}) {
+  const inputs = (opts.inputs || []).map((x) => (typeof x === 'string' ? { file: x } : { ...x }));
+  if (inputs.length < 2 || inputs.length > 4) throw new Error('Compare needs 2 to 4 videos');
+  for (const i of inputs) {
+    i.file = path.resolve(i.file);
+    if (!fs.existsSync(i.file)) throw new Error(`${i.file} not found`);
+    i.offset = Math.max(0, Number(i.offset) || 0);
+    if (i.label === undefined || i.label === null) i.label = path.parse(i.file).name.replace(/_fps$/, '');
+  }
+  const infos = await Promise.all(inputs.map((i) => probe(i.file)));
+  const layout = LAYOUTS.includes(opts.layout) ? opts.layout : inputs.length > 2 ? 'grid' : 'h';
+  const encoder = ENCODERS.includes(opts.encoder) ? opts.encoder : 'gpu';
+  const q = QUALITY[opts.quality] || QUALITY.standard;
+  const stems = inputs.map((i) => path.parse(i.file).name.replace(/_fps$/, ''));
+  const out = path.resolve(opts.out || path.join(path.dirname(inputs[0].file), `${stems.join('_vs_')}_compare.mp4`));
+  const outDir = path.dirname(out);
+  fs.mkdirSync(outDir, { recursive: true });
+  const labelFiles = inputs.map((i, k) => (i.label === '' ? null : path.join(outDir, `compare_label_${process.pid}_${k}.txt`)));
+  const g = compareGraph(infos, layout, labelFiles, outDir);
+  if (encoder === 'gpu' && g.width > NVENC_H264_MAX) {
+    throw new Error(`${g.width}×${g.height} is wider than NVENC H.264 allows (${NVENC_H264_MAX} pixels). ` +
+      'Stack the videos or choose the CPU (x264) encoder.');
+  }
+  const hw = await useHwDecode(opts);
+  const video_ = encoder === 'gpu'
+    ? ['-c:v', 'h264_nvenc', '-preset', 'p5', '-tune', 'hq', '-rc', 'vbr', '-cq', String(q.cq), '-b:v', '0', '-spatial-aq', '1']
+    : ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(q.crf)];
+  const span = Math.max(0.001, Math.min(...inputs.map((i, k) => infos[k].duration - i.offset)));
+  const part = `${out}.part.mp4`;
+  const t0 = Date.now();
+  onProgress({ phase: 'compare', fraction: 0 });
+  try {
+    labelFiles.forEach((f, k) => { if (f) fs.writeFileSync(f, inputs[k].label); });
+    await runFfmpeg([
+      '-y',
+      ...inputs.flatMap((i) => [...(hw ? ['-hwaccel', 'cuda'] : []), '-ss', i.offset.toFixed(3), '-i', i.file]),
+      '-filter_complex', g.graph, '-map', '[v]', '-map', '0:a:0?', '-shortest',
+      ...video_, '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', part,
+    ], {
+      cwd: outDir, signal,
+      onProgress: (s) => onProgress({ phase: 'compare', fraction: Math.min(1, s / span) }),
+    });
+  } catch (e) {
+    fs.rmSync(part, { force: true });
+    if (e.name !== 'AbortError' && encoder === 'gpu') e.message = `GPU encoding (NVENC) failed. Choose CPU (x264) and try again.\n\n${e.message}`;
+    throw e;
+  } finally {
+    for (const f of labelFiles) if (f) fs.rmSync(f, { force: true });
+  }
+  fs.renameSync(part, out);
+  return { path: out, seconds: (Date.now() - t0) / 1000, encoder, hwDecode: hw, width: g.width, height: g.height, layout };
 }
 
 /** What the window and the command line get back. */
@@ -222,6 +340,6 @@ async function runJob(opts, ctx = {}) {
 }
 
 module.exports = {
-  analyseVideo, renderOverlay, previewFrame, runJob, publicResult, defaultOutDir,
-  FONTS_DIR, QUALITY, ENCODERS, RESOLUTIONS, UPSCALERS, outputSize, overlayFilter,
+  analyseVideo, renderOverlay, previewFrame, runJob, publicResult, defaultOutDir, compareVideos, compareGraph,
+  FONTS_DIR, QUALITY, ENCODERS, RESOLUTIONS, UPSCALERS, LAYOUTS, outputSize, overlayFilter,
 };
