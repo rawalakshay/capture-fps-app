@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('api', {
   renderOnly: (opts) => ipcRenderer.invoke('render-only', opts),
   preview: (opts, at) => ipcRenderer.invoke('preview', opts, at),
   compare: (opts) => ipcRenderer.invoke('compare', opts),
+  loadResult: (outDir) => ipcRenderer.invoke('load-result', outDir),
   cancelJob: () => ipcRenderer.invoke('cancel-job'),
   openPath: (p) => ipcRenderer.invoke('open-path', p),
   showInFolder: (p) => ipcRenderer.invoke('show-in-folder', p),

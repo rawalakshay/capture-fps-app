@@ -175,6 +175,13 @@ Numbers update every 250 ms; the frame-time chart, the stall counter and the
 timecode every 1/30 s (`--overlay-rate`, 1–100, trades that smoothness for
 subtitle size; `overlay.ass` is roughly 0.2 MB per second of video).
 
+The overlay comes in four colour themes (the `theme` option): **Classic**
+(the blue-on-charcoal panel above), **Mono** (white on near-black, amber and
+red only when something misses the target), **Aurora** (navy with a cyan edge
+light and a glowing number) and **Vice** (deep purple, pink and orange, with
+the title and number in slanted Oswald). Every look takes the colours; the
+accent bars and hero effects are drawn on the Panel look.
+
 ## Comparing videos
 
 **Compare videos…** in the results menu (or `--compare a_fps.mp4 b_fps.mp4` on

@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { analyse, summarise } = require('../src/core/analysis');
-const { Overlay, createOverlay, assColor, LAYOUT, COLORS } = require('../src/core/overlay');
+const { Overlay, createOverlay, assColor, LAYOUT, COLORS, THEMES, THEME_NAMES } = require('../src/core/overlay');
 
 const HZ = 60;
 const SIZE = { width: 1920, height: 1080, hz: HZ };
@@ -307,6 +307,33 @@ test('the end card holds the results over the last frame for 4 s', () => {
   assert.ok(plain.some((p) => p.startsWith('FRAME TIME · ')), 'histogram title');
   assert.ok(plain.includes(s.avg_fps.toFixed(1)) && plain.includes(String(s.hitches.count)) && plain.includes(`${Math.round(s.pacing.even_pct)}%`));
   assert.ok(!events.some((e) => e.start < a.duration - 0.011 && e.end > a.duration + 0.011), 'nothing else runs into the card');
+});
+
+test('overlay themes recolour the panel; classic is the default and unchanged', () => {
+  const a = analyse(rowsFromCounts(Array(720).fill(1)), HZ, 0.4, 60);
+  const mk = (theme) => new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE, theme === undefined ? {} : { theme }).build();
+  assert.deepEqual(THEME_NAMES, ['classic', 'mono', 'aurora', 'vice']);
+  const out = {};
+  for (const theme of THEME_NAMES) {
+    out[theme] = mk(theme);
+    const events = parse(out[theme]);
+    assert.ok(events.length > 100 && !/NaN|undefined|Infinity|null/.test(out[theme]), `${theme}: builds`);
+    const hero = active(events, 6.0).filter((e) => e.plain === '60' && e.pos && Math.abs(e.pos[0] - (OX + LAYOUT.PAD)) < 0.11);
+    assert.ok(hero.length >= 1, `${theme}: hero shown`);
+    assert.ok(out[theme].includes(assColor(THEMES[theme].PANEL)), `${theme}: its card colour`);
+  }
+  assert.equal(out.classic, mk(undefined), 'classic is the default');
+  assert.equal(mk('nope'), out.classic, 'an unknown theme falls back to classic');
+  assert.ok(out.vice.includes('\\fnOswald Bold') && out.vice.includes('\\fnOswald Medium') && out.vice.includes('\\fax-0.18'), 'vice: sheared Oswald');
+  assert.ok(!/\\fnIBM Plex Mono[^\\]*\\[^}]*\\fax/.test(out.vice), 'vice: mono runs are not sheared');
+  assert.ok(out.vice.includes('\\clip('), 'vice: two-tone hero');
+  assert.ok(out.aurora.includes('\\blur'), 'aurora: hero glow');
+  // Mono's on-target bars are the text colour at 55 %, not blue.
+  const bars = fpsBars(parse(out.mono), 6.0);
+  assert.ok(bars.length > 10 && bars.every((b) => b.colors.includes(assColor(THEMES.mono.TEXT).slice(2))), 'mono: white bars');
+  const barEvents = parse(out.mono).filter((e) => e.drawing && e.rects.some((r) => Math.abs(r.y2 - (OY + LAYOUT.FPS_TOP + LAYOUT.CHART_H)) < 0.11 && r.h >= 2));
+  assert.ok(barEvents.length && barEvents.every((e) => e.text.includes('\\1a&H73&')), 'mono: bars at 55 % alpha');
+  assert.ok(!out.mono.includes(assColor(COLORS.BLUE)), 'mono: no blue');
 });
 
 test('the subtitle file is well formed and bounded', () => {

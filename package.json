@@ -1,7 +1,7 @@
 {
   "name": "capture-fps",
   "productName": "Capture FPS",
-  "version": "1.3.1",
+  "version": "2.0.0",
   "description": "Measure a console game's frame rate from a capture-card recording and burn an FPS overlay into the video.",
   "main": "main.js",
   "private": true,

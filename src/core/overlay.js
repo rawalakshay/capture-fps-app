@@ -8,11 +8,41 @@ const fs = require('fs');
 const path = require('path');
 const { bisectLeft, bisectRight, percentile, summarise, isPlay } = require('./analysis');
 
-const PANEL = 0x0A0C0F, LINE = 0x3A434C;
-const TEXT = 0xEEF2F5, LABEL = 0xC9D0D6, DIM = 0xA7B0B8, FOOT = 0x8E98A1;
-const BLUE = 0x5AA9E6, AMBER = 0xF5B13D, RED = 0xF2545B;
 const MONO = 'IBM Plex Mono', MONO_MED = 'IBM Plex Mono Medm', MONO_SEMI = 'IBM Plex Mono SmBld';
 const SANS = 'IBM Plex Sans Cond', SANS_MED = 'IBM Plex Sans Cond Medm', SANS_SEMI = 'IBM Plex Sans Cond SmBld';
+const MONO_FONTS = new Set([MONO, MONO_MED, MONO_SEMI]);
+const PLEX = { MONO, MONO_MED, MONO_SEMI, SANS, SANS_MED, SANS_SEMI };
+// Colour themes (opts.theme). BLUE is the "on target" colour; BAR_A is the alpha
+// on-target bars are filled with; HERO replaces the hero number's font when set;
+// FAX shears the sans runs; ACCENT, GLOW and TWO_TONE are decorations the Panel
+// look draws. classic is the original palette and the fallback.
+const THEMES = Object.freeze({
+  classic: Object.freeze({
+    PANEL: 0x0A0C0F, PANEL_A: 0.86, LINE: 0x3A434C, LINE_A: 1.0,
+    TEXT: 0xEEF2F5, LABEL: 0xC9D0D6, DIM: 0xA7B0B8, FOOT: 0x8E98A1,
+    BLUE: 0x5AA9E6, AMBER: 0xF5B13D, RED: 0xF2545B, BAR_A: 1.0, HERO: null, FAX: 0, ...PLEX,
+  }),
+  mono: Object.freeze({
+    PANEL: 0x0A0C0F, PANEL_A: 0.82, LINE: 0xFFFFFF, LINE_A: 0.12,
+    TEXT: 0xEEF2F5, LABEL: 0xC9D0D6, DIM: 0xA7B0B8, FOOT: 0x8E98A1,
+    BLUE: 0xEEF2F5, AMBER: 0xF5B13D, RED: 0xF2545B, BAR_A: 0.55, HERO: null, FAX: 0, ...PLEX,
+  }),
+  aurora: Object.freeze({
+    PANEL: 0x080C16, PANEL_A: 0.86, LINE: 0x22D3EE, LINE_A: 0.35,
+    TEXT: 0xE6FBFF, LABEL: 0xA5F3FC, DIM: 0xCBD5E1, FOOT: 0x94A3B8,
+    BLUE: 0x22D3EE, AMBER: 0xFBBF24, RED: 0xFB7185, BAR_A: 1.0, HERO: null, FAX: 0, ...PLEX,
+    ACCENT: 'left', GLOW: true,
+  }),
+  vice: Object.freeze({
+    PANEL: 0x150A24, PANEL_A: 0.88, LINE: 0xFF4FA3, LINE_A: 0.30,
+    TEXT: 0xFDF2F8, LABEL: 0xE9D5FF, DIM: 0xC4B5FD, FOOT: 0xA78BFA,
+    BLUE: 0xFF4FA3, AMBER: 0xFF8A3D, RED: 0xFF3344, BAR_A: 1.0, FAX: -0.18,
+    MONO, MONO_MED, MONO_SEMI, SANS: 'Oswald Medium', SANS_MED: 'Oswald Medium', SANS_SEMI: 'Oswald Bold', HERO: 'Oswald Bold',
+    ACCENT: 'top', TWO_TONE: true,
+  }),
+});
+const THEME_NAMES = Object.freeze(Object.keys(THEMES));
+const HERO_CAP = 0.81; // Oswald cap height in em, for the two-tone split
 // libass sizes a font by ascent + descent (1.3 em for Plex), CSS by its em.
 const FS_PER_PX = 1.3, DESCENT = 0.275;
 
@@ -99,29 +129,6 @@ function roundedPath(x, y, w, h, r) {
   ].join(' ');
 }
 
-/** Text colour for a frame rate against the target: on target, a little under, well under. */
-function levelColor(fps, target) {
-  if (fps >= 0.95 * target) return TEXT;
-  if (fps >= 0.8 * target) return AMBER;
-  return RED;
-}
-function barColor(fps, target) {
-  if (fps >= 0.95 * target) return BLUE;
-  if (fps >= 0.8 * target) return AMBER;
-  return RED;
-}
-/** Bar and text colours for a frame time against the target frame time. */
-function ftBarColor(ms, targetMs) {
-  if (ms <= targetMs * 1.2) return BLUE;
-  if (ms <= targetMs * 2.05) return AMBER;
-  return RED;
-}
-function ftTextColor(ms, targetMs) {
-  if (ms <= targetMs * 1.2) return TEXT;
-  if (ms <= targetMs * 2.05) return AMBER;
-  return RED;
-}
-
 /** Width of mono text in CSS px (Plex Mono advances are exactly 0.6 em). */
 const monoW = (s, size, spacing = 0) => s.length * (0.6 + spacing) * size;
 /** Rough width of condensed sans text; only used to decide whether something fits. */
@@ -184,6 +191,7 @@ class Overlay {
   constructor(a, size, title, rate = 30, position = 'right', capture = null, opts = {}) {
     this.a = a;
     this.opts = opts;
+    this.c = THEMES[opts.theme] || THEMES.classic;
     this.k = size.height / 1080.0;
     this.w = size.width;
     this.h = size.height;
@@ -206,32 +214,59 @@ class Overlay {
 
   px(v) { return v * this.k; }
 
-  /** One styled text run; size in CSS px, spacing in em. */
+  /** Text colour for a frame rate against the target: on target, a little under, well under. */
+  levelColor(fps, target) {
+    if (fps >= 0.95 * target) return this.c.TEXT;
+    if (fps >= 0.8 * target) return this.c.AMBER;
+    return this.c.RED;
+  }
+  barColor(fps, target) {
+    if (fps >= 0.95 * target) return this.c.BLUE;
+    if (fps >= 0.8 * target) return this.c.AMBER;
+    return this.c.RED;
+  }
+  /** Bar and text colours for a frame time against the target frame time. */
+  ftBarColor(ms, targetMs) {
+    if (ms <= targetMs * 1.2) return this.c.BLUE;
+    if (ms <= targetMs * 2.05) return this.c.AMBER;
+    return this.c.RED;
+  }
+  ftTextColor(ms, targetMs) {
+    if (ms <= targetMs * 1.2) return this.c.TEXT;
+    if (ms <= targetMs * 2.05) return this.c.AMBER;
+    return this.c.RED;
+  }
+  /** On-target bars may be translucent (mono draws them as white at 55 %); the rest are solid. */
+  barAlpha(color) { return color === this.c.BLUE ? this.c.BAR_A : 1.0; }
+
+  /** One styled text run; size in CSS px, spacing in em. The theme's shear applies to sans runs. */
   run(s, font, size, color, spacing = 0.0) {
+    const fax = this.c.FAX && !MONO_FONTS.has(font) ? `\\fax${this.c.FAX}` : '';
     return `{\\fn${font}\\fs${f1(this.px(size) * FS_PER_PX)}` +
-      `\\fsp${this.px(size * spacing).toFixed(2)}\\c${assColor(color)}}${s}`;
+      `\\fsp${this.px(size * spacing).toFixed(2)}${fax}\\c${assColor(color)}}${s}`;
   }
 
   // ---- event bodies and emission ----
 
   /** Runs with their baseline at (x, baseline) in panel px; size is the
-   * largest run size in the line (it sets the descent libass anchors by). */
-  textBody(x, baseline, runs, size, align = 'l') {
+   * largest run size in the line (it sets the descent libass anchors by).
+   * extra: more override tags (\clip, \blur) for the line. */
+  textBody(x, baseline, runs, size, align = 'l', extra = '') {
     const an = { l: 1, c: 2, r: 3 }[align];
     const X = this.px(this.ox + x);
     const Y = this.px(this.oy + baseline + DESCENT * size);
-    return `{\\an${an}\\pos(${f1(X)},${f1(Y)})\\bord0\\shad0}${runs}`;
+    return `{\\an${an}\\pos(${f1(X)},${f1(Y)})\\bord0\\shad0${extra}}${runs}`;
   }
 
   /** A drawing in output px. With an outline colour the fill is fillAlpha
    * (0 = hollow, as the pills are) and the 1 px border takes alpha. */
-  shapeBody(p, color, alpha, outline = null, fillAlpha = 0) {
+  shapeBody(p, color, alpha, outline = null, fillAlpha = 0, extra = '') {
     const aa = hex2(Math.round((1 - alpha) * 255));
     const style = outline === null
       ? `\\bord0\\c${assColor(color)}\\1a&H${aa}&`
       : `\\bord${f1(this.px(1))}\\c${assColor(color)}\\3c${assColor(outline)}` +
         `\\1a&H${hex2(Math.round((1 - fillAlpha) * 255))}&\\3a&H${aa}&`;
-    return `{\\an7\\pos(0,0)\\shad0\\p1${style}}${p}{\\p0}`;
+    return `{\\an7\\pos(0,0)\\shad0${extra}\\p1${style}}${p}{\\p0}`;
   }
 
   /** Rectangles given in panel px. */
@@ -247,8 +282,8 @@ class Overlay {
     this.lines.push(`Dialogue: ${layer},${s0},${s1},HUD,,0,0,0,,${body}`);
   }
 
-  text(t0, t1, x, baseline, runs, size, align = 'l', layer = 3) {
-    this.emit(layer, t0, t1, this.textBody(x, baseline, runs, size, align));
+  text(t0, t1, x, baseline, runs, size, align = 'l', layer = 3, extra = '') {
+    this.emit(layer, t0, t1, this.textBody(x, baseline, runs, size, align, extra));
   }
 
   shape(t0, t1, p, color, alpha, layer = 1, outline = null, fillAlpha = 0) {
@@ -281,8 +316,8 @@ class Overlay {
   pill(t0, t1, rightX, s, top = LAYOUT.PILL_TOP, size = 13) {
     const w = monoW(s, size) + 16, h = size === 13 ? LAYOUT.PILL_H : size * FS_PER_PX + 4;
     this.shape(t0, t1, roundedPath(this.px(this.ox + rightX - w + 0.5), this.px(this.oy + top),
-      this.px(w - 1), this.px(h), this.px(4)), PANEL, 1.0, 1, LINE);
-    this.text(t0, t1, rightX - w / 2, top + LAYOUT.PILL_BASE - LAYOUT.PILL_TOP, this.run(s, MONO_MED, size, DIM), size, 'c');
+      this.px(w - 1), this.px(h), this.px(4)), this.c.PANEL, this.c.LINE_A, 1, this.c.LINE);
+    this.text(t0, t1, rightX - w / 2, top + LAYOUT.PILL_BASE - LAYOUT.PILL_TOP, this.run(s, this.c.MONO_MED, size, this.c.DIM), size, 'c');
     return w;
   }
 
@@ -290,8 +325,8 @@ class Overlay {
   chartLabelLeft(t0, t1, left, top, s) {
     const size = 13, w = monoW(s, size) + 8, h = size * FS_PER_PX;
     this.shape(t0, t1, roundedPath(this.px(this.ox + left), this.px(this.oy + top), this.px(w), this.px(h), this.px(2)),
-      PANEL, 0.86, 3);
-    this.text(t0, t1, left + 4, top + h - DESCENT * size, this.run(s, MONO_MED, size, LABEL), size, 'l', 4);
+      this.c.PANEL, this.c.PANEL_A, 3);
+    this.text(t0, t1, left + 4, top + h - DESCENT * size, this.run(s, this.c.MONO_MED, size, this.c.LABEL), size, 'l', 4);
   }
 
   /** Free text on the video, 24 px in from a corner or edge, outlined so it reads on any footage.
@@ -305,14 +340,14 @@ class Overlay {
     // Bottom left is the watermark's spot; with the long graph on, the whole bottom edge is taken.
     const lift = this.lg ? this.lg.gy - 16 - (1080 - margin) : aboveWatermark && h === 'left' ? -40 : 0;
     const y = v === 'bottom' ? 1080 - margin + lift : underPanel ? this.oy + this.H + 16 : margin;
-    this.emit(3, 0, D, `{\\an${an}\\pos(${f1(this.px(x))},${f1(this.px(y))})\\bord${f1(this.px(2))}\\3c${assColor(PANEL)}\\shad0}` +
-      this.run(s, SANS_SEMI, size, TEXT, 0.04));
+    this.emit(3, 0, D, `{\\an${an}\\pos(${f1(this.px(x))},${f1(this.px(y))})\\bord${f1(this.px(2))}\\3c${assColor(this.c.PANEL)}\\shad0}` +
+      this.run(s, this.c.SANS_SEMI, size, this.c.TEXT, 0.04));
   }
 
   /** Watermark at the bottom left: smaller and dimmer than a caption, outlined, 80 % opaque. */
   drawWatermark(D, s) {
-    this.emit(3, 0, D, `{\\an1\\pos(${f1(this.px(24))},${f1(this.px(1056))})\\bord${f1(this.px(1.5))}\\3c${assColor(PANEL)}` +
-      `\\1a&H33&\\3a&H33&\\shad0}` + this.run(s, SANS_SEMI, 22, LABEL, 0.04));
+    this.emit(3, 0, D, `{\\an1\\pos(${f1(this.px(24))},${f1(this.px(1056))})\\bord${f1(this.px(1.5))}\\3c${assColor(this.c.PANEL)}` +
+      `\\1a&H33&\\3a&H33&\\shad0}` + this.run(s, this.c.SANS_SEMI, 22, this.c.LABEL, 0.04));
   }
 
   /** Value box at the top of the frame-time chart for a bar taller than the scale. */
@@ -320,14 +355,14 @@ class Overlay {
     const s = ms.toFixed(0), size = 13, w = monoW(s, size) + 8, h = 17;
     const lx = xBar + barW / 2 > mid ? xBar - 2 - w : xBar + barW + 2;
     this.slot(`${key}${i}b`, 3, t, this.shapeBody(roundedPath(this.px(this.ox + lx), this.px(this.oy + top),
-      this.px(w), this.px(h), this.px(2)), PANEL, 0.86));
-    this.slot(`${key}${i}t`, 4, t, this.textBody(lx + w - 4, top + h - DESCENT * size, this.run(s, MONO_SEMI, size, RED), size, 'r'));
+      this.px(w), this.px(h), this.px(2)), this.c.PANEL, this.c.PANEL_A));
+    this.slot(`${key}${i}t`, 4, t, this.textBody(lx + w - 4, top + h - DESCENT * size, this.run(s, this.c.MONO_SEMI, size, this.c.RED), size, 'r'));
   }
 
   /** Outlined bar for the frame still on screen; inset 1 px so the border stays in its column.
    * stalled: 'hitch' draws it red, 'paused' (a still or a load) dim, anything else plain. */
   liveBar(t, x, w, h, stalled, bottom = LAYOUT.FT_TOP + CHART_H, key = 'ftLive') {
-    const col = stalled === 'hitch' ? RED : stalled === 'paused' ? FOOT : LABEL;
+    const col = stalled === 'hitch' ? this.c.RED : stalled === 'paused' ? this.c.FOOT : this.c.LABEL;
     const { ox, oy } = this;
     const p = rectsPath([[this.px(ox + x + 1), this.px(oy + bottom - h + 1),
       this.px(Math.max(0.5, w - 2)), this.px(Math.max(0.5, h - 2))]]);
@@ -340,17 +375,17 @@ class Overlay {
     const { targetMs } = this.m;
     const fbw = (w - (slots - 1)) / slots, scale = 3 * targetMs;
     const first = slots - 1 - f.last.length;
-    const groups = new Map([[BLUE, []], [AMBER, []], [RED, []], [FOOT, []]]);
-    const keys = new Map([[BLUE, `${key}Blue`], [AMBER, `${key}Amber`], [RED, `${key}Red`], [FOOT, `${key}Dim`]]);
+    const groups = new Map([[this.c.BLUE, []], [this.c.AMBER, []], [this.c.RED, []], [this.c.FOOT, []]]);
+    const keys = new Map([[this.c.BLUE, `${key}Blue`], [this.c.AMBER, `${key}Amber`], [this.c.RED, `${key}Red`], [this.c.FOOT, `${key}Dim`]]);
     const overflow = [];
     f.last.forEach((ms, j) => {
       const bh = Math.max(2.0, Math.min(1.0, ms / scale) * h);
       const bx = x + (first + j) * (fbw + 1);
       const play = isPlay(f.lastKinds[j]);
-      groups.get(play ? ftBarColor(ms, targetMs) : FOOT).push([bx, top + h - bh, fbw, bh]);
+      groups.get(play ? this.ftBarColor(ms, targetMs) : this.c.FOOT).push([bx, top + h - bh, fbw, bh]);
       if (ms > scale * 1.001 && play) overflow.push({ x: bx, ms });
     });
-    for (const [col, rs] of groups) this.slot(keys.get(col), 2, tt, rs.length ? this.rectsBody(rs, col, 1.0) : null);
+    for (const [col, rs] of groups) this.slot(keys.get(col), 2, tt, rs.length ? this.rectsBody(rs, col, this.barAlpha(col)) : null);
     const shown = overflow.slice(-MAX_OVERFLOW_LABELS), okey = key === 'ft' ? 'ovl' : `${key}ovl`;
     for (let i = 0; i < MAX_OVERFLOW_LABELS; i++) {
       if (shown[i]) this.overflowLabel(i, tt, shown[i].x, fbw, shown[i].ms, top + 2, x + w / 2, okey);
@@ -371,11 +406,11 @@ class Overlay {
     const avail = width - (live.length - 1) * 2;
     for (const [share, color, label] of live) {
       const w = share * avail;
-      this.shape(t0, t1, roundedPath(this.px(this.ox + x), this.px(this.oy + y), this.px(w), this.px(h), this.px(2)), color, 1.0, 2);
+      this.shape(t0, t1, roundedPath(this.px(this.ox + x), this.px(this.oy + y), this.px(w), this.px(h), this.px(2)), color, this.barAlpha(color), 2);
       if (labels) {
         const pct = `${Math.round(share * 100)}%`, full = `${label}  ${pct}`;
         const s = w >= monoW(full, 13) + 10 ? full : w >= monoW(pct, 13) + 8 ? pct : null;
-        if (s) this.text(t0, t1, x + w / 2, y + h - 3.5, this.run(s, MONO_SEMI, 13, PANEL), 13, 'c');
+        if (s) this.text(t0, t1, x + w / 2, y + h - 3.5, this.run(s, this.c.MONO_SEMI, 13, this.c.PANEL), 13, 'c');
       }
       x += w + 2;
     }
@@ -534,39 +569,48 @@ class Overlay {
     const a = this.a, L = LAYOUT, px = (v) => this.px(v);
     const { target, targetMs, yMax } = this.m;
     const { ox, oy } = this;
-    this.shape(0, D, roundedPath(px(ox), px(oy), px(PW), px(PH), px(10)), PANEL, 0.86, 0);
+    this.shape(0, D, roundedPath(px(ox), px(oy), px(PW), px(PH), px(10)), this.c.PANEL, this.c.PANEL_A, 0);
+    const c = this.c;
+    if (c.ACCENT === 'left') { // a 3 px light along the left edge, clear of the corners
+      this.shape(0, D, roundedPath(px(ox), px(oy + 14), px(3), px(PH - 28), px(1.5)), c.BLUE, 1.0, 1);
+    } else if (c.ACCENT === 'top') { // the card's own outline 1 px in, clipped to its top 3 px: pink left, orange right
+      const p = roundedPath(px(ox + 1), px(oy + 1), px(PW - 2), px(PH - 2), px(9));
+      const clip = (x1, x2) => `\\clip(${Math.round(px(x1))},${Math.round(px(oy))},${Math.round(px(x2))},${Math.round(px(oy + 4))})`;
+      this.emit(1, 0, D, this.shapeBody(p, c.BLUE, 1.0, null, 0, clip(ox, ox + PW / 2)));
+      this.emit(1, 0, D, this.shapeBody(p, c.AMBER, 1.0, null, 0, clip(ox + PW / 2, ox + PW)));
+    }
     // Pills, right to left: target, then the capture format; each can be turned off.
     const pillsW = this.drawPills(D, PW - PAD, LAYOUT.PILL_TOP, 13);
     // Title, cut to fit beside the pills.
     const title = this.fitTitle(IW - Math.max(0, pillsW - 6) - 8);
     this.drawExtras(D);
-    this.text(0, D, PAD, L.TITLE_BASE, this.run(title, SANS_SEMI, 14, DIM, 0.08), 14);
-    this.text(0, D, L.COL2_R, L.EYEBROW_BASE, this.run('LAST 10 S', SANS_MED, 13, FOOT, 0.06), 13, 'r');
-    this.text(0, D, L.COL1_R, L.GRID_LABEL_BASE, this.run('AVG', SANS_SEMI, 16, LABEL, 0.06), 16, 'r');
-    this.text(0, D, L.COL2_R, L.GRID_LABEL_BASE, this.run('1% LOW', SANS_SEMI, 16, LABEL, 0.06), 16, 'r');
+    this.text(0, D, PAD, L.TITLE_BASE, this.run(title, this.c.SANS_SEMI, 14, this.c.DIM, 0.08), 14);
+    this.text(0, D, L.COL2_R, L.EYEBROW_BASE, this.run('LAST 10 S', this.c.SANS_MED, 13, this.c.FOOT, 0.06), 13, 'r');
+    this.text(0, D, L.COL1_R, L.GRID_LABEL_BASE, this.run('AVG', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06), 16, 'r');
+    this.text(0, D, L.COL2_R, L.GRID_LABEL_BASE, this.run('1% LOW', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06), 16, 'r');
     ['RUN AVG', '1% LOW', '0.1% LOW', 'MISSED', 'HITCHES'].forEach((s, i) => {
-      this.text(0, D, L.RUN_COLS[i], L.RUN_LABEL_BASE, this.run(s, SANS_MED, 13, FOOT, 0.06), 13, 'r');
+      this.text(0, D, L.RUN_COLS[i], L.RUN_LABEL_BASE, this.run(s, this.c.SANS_MED, 13, this.c.FOOT, 0.06), 13, 'r');
     });
     // Chart baselines, the target line and the frame-time grid, labelled at the left.
-    this.rects(0, D, [[PAD, L.FPS_TOP + CHART_H, IW, 1], [PAD, L.FT_TOP + CHART_H, IW, 1]], LINE, 1.0);
+    this.rects(0, D, [[PAD, L.FPS_TOP + CHART_H, IW, 1], [PAD, L.FT_TOP + CHART_H, IW, 1]], this.c.LINE, this.c.LINE_A);
     const ty = L.FPS_TOP + CHART_H - CHART_H * (target / yMax);
-    this.rects(0, D, [[PAD, ty, IW, 1]], TEXT, 0.45, 3);
+    this.rects(0, D, [[PAD, ty, IW, 1]], this.c.TEXT, 0.45, 3);
     this.chartLabelLeft(0, D, PAD, ty + 3, String(target));
     const g1 = CHART_H / 3, g2 = CHART_H * 2 / 3;
-    this.rects(0, D, [[PAD, L.FT_TOP + CHART_H - g1, IW, 1]], TEXT, 0.45, 3);
-    this.rects(0, D, [[PAD, L.FT_TOP + CHART_H - g2, IW, 1]], TEXT, 0.22, 3);
+    this.rects(0, D, [[PAD, L.FT_TOP + CHART_H - g1, IW, 1]], this.c.TEXT, 0.45, 3);
+    this.rects(0, D, [[PAD, L.FT_TOP + CHART_H - g2, IW, 1]], this.c.TEXT, 0.22, 3);
     this.chartLabelLeft(0, D, PAD, L.FT_TOP + CHART_H - g1 + 3, `${targetMs.toFixed(1)} ms`);
     this.chartLabelLeft(0, D, PAD, L.FT_TOP + CHART_H - g2 + 3, (2 * targetMs).toFixed(1));
     // Below the refresh rate, a frame one refresh late (3 refreshes at 30 fps in 60 Hz) is the pacing line.
     if (this.m.kRef > 1) {
       const gl = CHART_H * (this.m.kRef + 1) / (3 * this.m.kRef);
-      this.rects(0, D, [[PAD, L.FT_TOP + CHART_H - gl, IW, 1]], AMBER, 0.35, 3);
+      this.rects(0, D, [[PAD, L.FT_TOP + CHART_H - gl, IW, 1]], this.c.AMBER, 0.35, 3);
     }
-    this.text(0, D, PAD, L.PACING_BASE, this.run('PACING · 10 S', SANS_SEMI, 16, LABEL, 0.06), 16);
+    this.text(0, D, PAD, L.PACING_BASE, this.run('PACING · 10 S', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06), 16);
     const n = a.droppedRefreshes || 0;
     const drops = n ? `${n} rec drop${n === 1 ? '' : 's'}` : 'no rec drops';
     this.text(0, D, PAD, L.FOOT_BASE,
-      this.run(`thr ${Number(a.threshold).toFixed(2)} ${shortSource(a.thresholdSource)} · ${drops}`, SANS, 13, FOOT), 13);
+      this.run(`thr ${Number(a.threshold).toFixed(2)} ${shortSource(a.thresholdSource)} · ${drops}`, this.c.SANS, 13, this.c.FOOT), 13);
   }
 
   drawNumbers(tq, tEnd) {
@@ -574,53 +618,61 @@ class Overlay {
     const L = LAYOUT;
     const { target, refreshMs, kRef, yMax } = this.m;
     // Hero and its labels (the labels move with the digit count).
-    const heroS = fmt0(n.hero);
-    this.text(tq, tEnd, PAD, L.HERO_BASE,
-      this.run(heroS, MONO_SEMI, 72, n.hero == null ? TEXT : levelColor(n.hero, target), -0.03), 72);
+    const heroS = fmt0(n.hero), c = this.c, heroFont = c.HERO || c.MONO_SEMI;
+    const heroCol = n.hero == null ? c.TEXT : this.levelColor(n.hero, target);
+    const hero = (col) => this.run(heroS, heroFont, 72, col, -0.03);
+    if (c.TWO_TONE && heroCol === c.TEXT) { // on target: the digits' top 55 % pink, the rest orange
+      const split = Math.round(this.px(this.oy + L.HERO_BASE - 0.45 * HERO_CAP * 72));
+      this.text(tq, tEnd, PAD, L.HERO_BASE, hero(c.BLUE), 72, 'l', 3, `\\clip(0,0,${this.w},${split})`);
+      this.text(tq, tEnd, PAD, L.HERO_BASE, hero(c.AMBER), 72, 'l', 3, `\\clip(0,${split},${this.w},${this.h})`);
+    } else {
+      if (c.GLOW) this.text(tq, tEnd, PAD, L.HERO_BASE, hero(heroCol === c.TEXT ? c.BLUE : heroCol), 72, 'l', 2, `\\blur${f1(this.px(6))}\\1a&H80&`);
+      this.text(tq, tEnd, PAD, L.HERO_BASE, hero(heroCol), 72);
+    }
     const lx = PAD + monoW(heroS, 72, -0.03) + 8;
-    this.slot('heroFps', 3, tq, this.textBody(lx, L.HERO_FPS_BASE, this.run('FPS', SANS_SEMI, 16, LABEL, 0.06), 16));
-    this.slot('heroSub', 3, tq, this.textBody(lx, L.HERO_BASE, this.run('0.5 S', SANS_MED, 13, FOOT, 0.06), 13));
+    this.slot('heroFps', 3, tq, this.textBody(lx, L.HERO_FPS_BASE, this.run('FPS', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06), 16));
+    this.slot('heroSub', 3, tq, this.textBody(lx, L.HERO_BASE, this.run('0.5 S', this.c.SANS_MED, 13, this.c.FOOT, 0.06), 13));
     this.text(tq, tEnd, L.COL1_R, L.GRID_VALUE_BASE,
-      this.run(fmt1(n.avg), MONO_SEMI, 26, n.avg == null ? TEXT : levelColor(n.avg, target)), 26, 'r');
+      this.run(fmt1(n.avg), this.c.MONO_SEMI, 26, n.avg == null ? this.c.TEXT : this.levelColor(n.avg, target)), 26, 'r');
     this.text(tq, tEnd, L.COL2_R, L.GRID_VALUE_BASE,
-      this.run(fmt1(n.low), MONO_SEMI, 26, n.low == null ? TEXT : levelColor(n.low, target)), 26, 'r');
+      this.run(fmt1(n.low), this.c.MONO_SEMI, 26, n.low == null ? this.c.TEXT : this.levelColor(n.low, target)), 26, 'r');
     const runVals = [fmt1(n.runAvg), fmt1(n.run1), fmt1(n.run01), n.missed == null ? '–' : `${Math.round(n.missed * 100)}%`, String(n.hitches)];
-    runVals.forEach((s, i) => this.text(tq, tEnd, L.RUN_COLS[i], L.RUN_VALUE_BASE, this.run(s, MONO_SEMI, 20, i === 4 && n.hitches ? RED : TEXT), 20, 'r'));
+    runVals.forEach((s, i) => this.text(tq, tEnd, L.RUN_COLS[i], L.RUN_VALUE_BASE, this.run(s, this.c.MONO_SEMI, 20, i === 4 && n.hitches ? this.c.RED : this.c.TEXT), 20, 'r'));
     // FPS chart: 40 slices, time-weighted.
     const bw = (IW - (FPS_BARS - 1) * 2) / FPS_BARS;
-    const groups = new Map([[BLUE, []], [AMBER, []], [RED, []], [FOOT, []]]);
+    const groups = new Map([[this.c.BLUE, []], [this.c.AMBER, []], [this.c.RED, []], [this.c.FOOT, []]]);
     const tris = [], hitchTris = [];
     for (const b of n.bars) {
       const h = Math.max(2.0, Math.min(1.0, b.fps / yMax) * CHART_H);
       const x = PAD + b.j * (bw + 2);
-      groups.get(b.paused ? FOOT : barColor(b.fps, target)).push([x, L.FPS_TOP + CHART_H - h, bw, h]);
+      groups.get(b.paused ? this.c.FOOT : this.barColor(b.fps, target)).push([x, L.FPS_TOP + CHART_H - h, bw, h]);
       if (b.drop) tris.push(x + bw / 2 - 3.5);
       else if (b.hitch) hitchTris.push(x + bw / 2 - 3.5);
     }
-    for (const [col, rs] of groups) this.rects(tq, tEnd, rs, col, 1.0);
+    for (const [col, rs] of groups) this.rects(tq, tEnd, rs, col, this.barAlpha(col));
     // Markers under the slices: a red triangle for a recorder drop, an amber one for a hitch.
     this.slot('drops', 2, tq, tris.length
-      ? this.shapeBody(tris.map((x) => this.trianglePath(x, L.FPS_TOP + CHART_H + 8)).join(' '), RED, 1.0) : null);
+      ? this.shapeBody(tris.map((x) => this.trianglePath(x, L.FPS_TOP + CHART_H + 8)).join(' '), this.c.RED, 1.0) : null);
     this.slot('hitches', 2, tq, hitchTris.length
-      ? this.shapeBody(hitchTris.map((x) => this.trianglePath(x, L.FPS_TOP + CHART_H + 8)).join(' '), AMBER, 1.0) : null);
+      ? this.shapeBody(hitchTris.map((x) => this.trianglePath(x, L.FPS_TOP + CHART_H + 8)).join(' '), this.c.AMBER, 1.0) : null);
     const flagged = n.dropsInWindow || n.tearsInWindow;
-    const left = this.run('FPS · LAST 10 S', SANS_SEMI, 16, LABEL, 0.06) +
-      (flagged ? '' : this.run(' · ¼ S SLICES', SANS_MED, 13, FOOT, 0.04));
+    const left = this.run('FPS · LAST 10 S', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06) +
+      (flagged ? '' : this.run(' · ¼ S SLICES', this.c.SANS_MED, 13, this.c.FOOT, 0.04));
     this.slot('fpsLabelL', 3, tq, this.textBody(PAD, L.FPS_LABEL_BASE, left, 16));
     this.text(tq, tEnd, PW - PAD, L.FPS_LABEL_BASE,
-      (n.dropsInWindow ? this.run('REC DROP · ', SANS_SEMI, 16, RED, 0.06) : '') +
-      (n.tearsInWindow ? this.run('TEAR · ', SANS_SEMI, 16, RED, 0.06) : '') +
-      this.run('MIN ', SANS_SEMI, 16, LABEL, 0.06) + this.run(fmt0(n.mn), MONO_SEMI, 16, TEXT) +
-      this.run(' · MAX ', SANS_SEMI, 16, LABEL, 0.06) + this.run(fmt0(n.mx), MONO_SEMI, 16, TEXT), 16, 'r');
+      (n.dropsInWindow ? this.run('REC DROP · ', this.c.SANS_SEMI, 16, this.c.RED, 0.06) : '') +
+      (n.tearsInWindow ? this.run('TEAR · ', this.c.SANS_SEMI, 16, this.c.RED, 0.06) : '') +
+      this.run('MIN ', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06) + this.run(fmt0(n.mn), this.c.MONO_SEMI, 16, this.c.TEXT) +
+      this.run(' · MAX ', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06) + this.run(fmt0(n.mx), this.c.MONO_SEMI, 16, this.c.TEXT), 16, 'r');
     // Pacing: below the refresh rate, the share of frames that held exactly the cap's
     // refreshes; at the refresh rate, shares of frames on time, one frame late, and longer.
     if (n.cadence) {
       const c = n.cadence, share = (v) => v / c.n, evenPct = Math.round(share(c.even) * 100);
       this.text(tq, tEnd, PW - PAD, L.PACING_BASE,
-        this.run('EVEN ', SANS_MED, 13, FOOT, 0.04) +
-        this.run(`${evenPct}%`, MONO_SEMI, 13, evenPct >= 95 ? TEXT : evenPct >= 80 ? AMBER : RED), 13, 'r');
-      this.stackedBar(tq, tEnd, [[share(c.short), AMBER, 'SHORT'], [share(c.even), BLUE, `${fmtMs(kRef * refreshMs)} ms`],
-        [share(c.late), AMBER, 'LATE'], [share(c.stall), RED, 'STALL']]);
+        this.run('EVEN ', this.c.SANS_MED, 13, this.c.FOOT, 0.04) +
+        this.run(`${evenPct}%`, this.c.MONO_SEMI, 13, evenPct >= 95 ? this.c.TEXT : evenPct >= 80 ? this.c.AMBER : this.c.RED), 13, 'r');
+      this.stackedBar(tq, tEnd, [[share(c.short), this.c.AMBER, 'SHORT'], [share(c.even), this.c.BLUE, `${fmtMs(kRef * refreshMs)} ms`],
+        [share(c.late), this.c.AMBER, 'LATE'], [share(c.stall), this.c.RED, 'STALL']]);
     } else if (n.pacing) {
       const p = n.pacing, ms = (c) => fmtMs(c * refreshMs);
       const labOn = kRef === 1 ? `${ms(1)} ms` : `≤${ms(kRef)} ms`;
@@ -628,11 +680,11 @@ class Overlay {
       const labStall = `≥${ms(2 * kRef + 1)} ms`;
       const share = (v) => v / p.n;
       this.text(tq, tEnd, PW - PAD, L.PACING_BASE,
-        this.run(`${labStall} `, SANS_MED, 13, FOOT, 0.04) +
-        this.run(`${Math.round(share(p.stall) * 100)}%`, MONO_SEMI, 13, p.stall ? RED : TEXT), 13, 'r');
-      this.stackedBar(tq, tEnd, [[share(p.on), BLUE, labOn], [share(p.late), AMBER, labLate], [share(p.stall), RED, labStall]]);
+        this.run(`${labStall} `, this.c.SANS_MED, 13, this.c.FOOT, 0.04) +
+        this.run(`${Math.round(share(p.stall) * 100)}%`, this.c.MONO_SEMI, 13, p.stall ? this.c.RED : this.c.TEXT), 13, 'r');
+      this.stackedBar(tq, tEnd, [[share(p.on), this.c.BLUE, labOn], [share(p.late), this.c.AMBER, labLate], [share(p.stall), this.c.RED, labStall]]);
     } else {
-      this.text(tq, tEnd, PW - PAD, L.PACING_BASE, this.run('–', MONO_MED, 13, FOOT), 13, 'r');
+      this.text(tq, tEnd, PW - PAD, L.PACING_BASE, this.run('–', this.c.MONO_MED, 13, this.c.FOOT), 13, 'r');
     }
   }
 
@@ -641,23 +693,23 @@ class Overlay {
     const L = LAYOUT;
     const { targetMs } = this.m;
     this.slot('last', 3, tt, this.textBody(PAD, L.LAST_BASE,
-      this.run('LAST FRAME  ', SANS_SEMI, 16, LABEL, 0.06) +
-      this.run(fmt1(f.lastMs), MONO_SEMI, 20, f.lastMs == null ? TEXT : ftTextColor(f.lastMs, targetMs)) +
-      this.run(' ms', MONO_SEMI, 13, DIM), 20));
+      this.run('LAST FRAME  ', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06) +
+      this.run(fmt1(f.lastMs), this.c.MONO_SEMI, 20, f.lastMs == null ? this.c.TEXT : this.ftTextColor(f.lastMs, targetMs)) +
+      this.run(' ms', this.c.MONO_SEMI, 13, this.c.DIM), 20));
     const hot = f.stallKind === 'hitch', badge = HOLD_NAMES[f.kind] || 'STALL';
     const held = f.elapsed < 1000 ? `${f.elapsed.toFixed(0)} ms` : `${(f.elapsed / 1000).toFixed(1)} s`;
     this.slot('stall', 3, tt, f.stalled ? this.textBody(PW - PAD, L.LAST_BASE,
-      this.run(`${badge}  `, SANS_SEMI, 16, hot ? RED : DIM, 0.06) + this.run(held, MONO_SEMI, 20, hot ? RED : DIM), 20, 'r') : null);
+      this.run(`${badge}  `, this.c.SANS_SEMI, 16, hot ? this.c.RED : this.c.DIM, 0.06) + this.run(held, this.c.MONO_SEMI, 20, hot ? this.c.RED : this.c.DIM), 20, 'r') : null);
     this.ftChart(tt, f, { key: 'ft', x: PAD, top: L.FT_TOP, w: IW, h: CHART_H, slots: FT_SHOW + 1 });
     const shownFrames = f.last.length + 1;
     this.slot('ftLabelL', 3, tt, this.textBody(PAD, L.FT_LABEL_BASE,
-      this.run('FRAME TIME', SANS_SEMI, 16, LABEL, 0.06) +
-      this.run(` · ${shownFrames} FRAME${shownFrames === 1 ? '' : 'S'} · ${f.spanS.toFixed(1)} S`, SANS_MED, 13, FOOT, 0.04), 16));
+      this.run('FRAME TIME', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06) +
+      this.run(` · ${shownFrames} FRAME${shownFrames === 1 ? '' : 'S'} · ${f.spanS.toFixed(1)} S`, this.c.SANS_MED, 13, this.c.FOOT, 0.04), 16));
     this.slot('ftMax', 3, tt, this.textBody(PW - PAD, L.FT_LABEL_BASE,
-      this.run('MAX ', SANS_SEMI, 16, LABEL, 0.06) +
-      this.run(fmt1(f.ftMax), MONO_SEMI, 16, f.ftMax == null ? TEXT : ftTextColor(f.ftMax, targetMs)) +
-      this.run(' ms', MONO_SEMI, 13, DIM), 16, 'r'));
-    this.text(tt, tEnd, PW - PAD, L.FOOT_BASE, this.run(tc(tt), MONO_MED, 13, LABEL), 13, 'r');
+      this.run('MAX ', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06) +
+      this.run(fmt1(f.ftMax), this.c.MONO_SEMI, 16, f.ftMax == null ? this.c.TEXT : this.ftTextColor(f.ftMax, targetMs)) +
+      this.run(' ms', this.c.MONO_SEMI, 13, this.c.DIM), 16, 'r'));
+    this.text(tt, tEnd, PW - PAD, L.FOOT_BASE, this.run(tc(tt), this.c.MONO_MED, 13, this.c.LABEL), 13, 'r');
     this.drawLongGraphTick(tt, f);
   }
 
@@ -679,13 +731,13 @@ class Overlay {
   drawLongGraphChrome(D) {
     const g = this.lg, { targetMs } = this.m, px = (v) => this.px(v);
     const top = g.ry + LG_TOP, x0 = g.rx + LG_PAD;
-    this.shape(0, D, roundedPath(px(g.gx), px(g.gy), px(g.GW), px(LG_H), px(10)), PANEL, g.alpha, 0);
-    this.text(0, D, x0, g.ry + 22, this.run('FRAME TIME', SANS_SEMI, 16, LABEL, 0.06) +
-      this.run(` · LAST ${LG_WIN} S`, SANS_MED, 13, FOOT, 0.04), 16);
-    this.rects(0, D, [[x0, top + LG_CH, g.iw, 1]], LINE, 1.0);
+    this.shape(0, D, roundedPath(px(g.gx), px(g.gy), px(g.GW), px(LG_H), px(10)), this.c.PANEL, g.alpha, 0);
+    this.text(0, D, x0, g.ry + 22, this.run('FRAME TIME', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06) +
+      this.run(` · LAST ${LG_WIN} S`, this.c.SANS_MED, 13, this.c.FOOT, 0.04), 16);
+    this.rects(0, D, [[x0, top + LG_CH, g.iw, 1]], this.c.LINE, this.c.LINE_A);
     const g1 = LG_CH / 3, g2 = LG_CH * 2 / 3;
-    this.rects(0, D, [[x0, top + LG_CH - g1, g.iw, 1]], TEXT, 0.45, 3);
-    this.rects(0, D, [[x0, top + LG_CH - g2, g.iw, 1]], TEXT, 0.22, 3);
+    this.rects(0, D, [[x0, top + LG_CH - g1, g.iw, 1]], this.c.TEXT, 0.45, 3);
+    this.rects(0, D, [[x0, top + LG_CH - g2, g.iw, 1]], this.c.TEXT, 0.22, 3);
     this.chartLabelLeft(0, D, x0, top + LG_CH - g1 + 3, `${targetMs.toFixed(1)} ms`);
     this.chartLabelLeft(0, D, x0, top + LG_CH - g2 + 3, (2 * targetMs).toFixed(1));
   }
@@ -701,8 +753,8 @@ class Overlay {
     let mx = f.stallKind === 'hitch' ? f.elapsed : 0;
     for (let i = bisectRight(ends, tt - LG_WIN), hi = bisectRight(ends, tt); i < hi; i++) if (isPlay(kind[i]) && frameMs[i] > mx) mx = frameMs[i];
     this.slot('lgMax', 3, tt, mx ? this.textBody(g.rx + g.GW - LG_PAD, g.ry + 22,
-      this.run('MAX ', SANS_SEMI, 16, LABEL, 0.06) + this.run(fmt1(mx), MONO_SEMI, 16, ftTextColor(mx, targetMs)) +
-      this.run(' ms', MONO_SEMI, 13, DIM), 16, 'r') : null);
+      this.run('MAX ', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06) + this.run(fmt1(mx), this.c.MONO_SEMI, 16, this.ftTextColor(mx, targetMs)) +
+      this.run(' ms', this.c.MONO_SEMI, 13, this.c.DIM), 16, 'r') : null);
   }
 
   /** One moving event per completed frame: it appears at the right edge when the frame
@@ -718,14 +770,14 @@ class Overlay {
       const ms = frameMs[i], t1 = Math.min(D, e + LG_WIN);
       const w = Math.max(1, ms / 1000 * g.speed - 1), h = Math.max(2.0, Math.min(1.0, ms / scale) * LG_CH);
       const x1 = g.x0 + g.iw - w, y = g.top + LG_CH - h;
-      const play = isPlay(kind[i]);
-      this.emit(2, e, t1, `{\\an7${move(x1, y)}${clip}\\shad0\\p1\\bord0\\c${assColor(play ? ftBarColor(ms, targetMs) : FOOT)}}` +
+      const play = isPlay(kind[i]), col = play ? this.ftBarColor(ms, targetMs) : this.c.FOOT, ba = this.barAlpha(col);
+      this.emit(2, e, t1, `{\\an7${move(x1, y)}${clip}\\shad0\\p1\\bord0\\c${assColor(col)}${ba < 1 ? `\\1a&H${hex2(Math.round((1 - ba) * 255))}&` : ''}}` +
         rectsPath([[0, 0, px(w), px(h)]]) + '{\\p0}');
       if (ms > scale * 1.001 && play) { // value box to the left of the bar, moving with it
         const s = ms.toFixed(0), size = 13, lw = monoW(s, size) + 8, lh = 17, lx = x1 - 2 - lw, ly = g.top + 2;
-        this.emit(3, e, t1, `{\\an7${move(lx, ly)}${clip}\\shad0\\p1\\bord0\\c${assColor(PANEL)}\\1a&H24&}` +
+        this.emit(3, e, t1, `{\\an7${move(lx, ly)}${clip}\\shad0\\p1\\bord0\\c${assColor(this.c.PANEL)}\\1a&H24&}` +
           roundedPath(0, 0, px(lw), px(lh), px(2)) + '{\\p0}');
-        this.emit(4, e, t1, `{\\an3${move(lx + lw - 4, ly + lh)}${clip}\\bord0\\shad0}` + this.run(s, MONO_SEMI, size, RED));
+        this.emit(4, e, t1, `{\\an3${move(lx + lw - 4, ly + lh)}${clip}\\bord0\\shad0}` + this.run(s, this.c.MONO_SEMI, size, this.c.RED));
       }
     }
   }
@@ -736,7 +788,7 @@ class Overlay {
       if (t.time >= D) break;
       const y = Math.round(t.y * this.h);
       this.emit(5, t.time, Math.min(D, t.time + TEAR_SHOW_S),
-        `{\\an7\\pos(0,0)\\fad(0,${Math.round(TEAR_SHOW_S * 750)})\\shad0\\p1\\bord0\\c${assColor(RED)}}` +
+        `{\\an7\\pos(0,0)\\fad(0,${Math.round(TEAR_SHOW_S * 750)})\\shad0\\p1\\bord0\\c${assColor(this.c.RED)}}` +
         rectsPath([[0, y - 1, this.w, this.px(2)]]) + '{\\p0}');
     }
   }
@@ -747,45 +799,45 @@ class Overlay {
     const t0 = D, t1 = D + END_CARD_S, frameW = this.w / this.k;
     const W = 760, H = 540, x0 = (frameW - W) / 2, y0 = (1080 - H) / 2;
     const { ox, oy } = this, X = (v) => x0 - ox + v, Y = (v) => y0 - oy + v; // panel-px helpers draw from the panel origin
-    this.emit(0, t0, t1, this.shapeBody(rectsPath([[0, 0, this.w, this.h]]), PANEL, 0.78));
-    this.shape(t0, t1, roundedPath(this.px(x0), this.px(y0), this.px(W), this.px(H), this.px(14)), PANEL, 1.0, 1, LINE, 0.96);
-    this.text(t0, t1, X(32), Y(44), this.run(this.fitTitle(W - 64 - 160, 20, 0.06), SANS_SEMI, 20, TEXT, 0.06), 20);
-    this.text(t0, t1, X(W - 32), Y(44), this.run(`${this.capture.height}P${Math.round(this.a.hz)} · TARGET ${this.a.target}`, MONO_MED, 13, DIM), 13, 'r');
+    this.emit(0, t0, t1, this.shapeBody(rectsPath([[0, 0, this.w, this.h]]), this.c.PANEL, 0.78));
+    this.shape(t0, t1, roundedPath(this.px(x0), this.px(y0), this.px(W), this.px(H), this.px(14)), this.c.PANEL, this.c.LINE_A, 1, this.c.LINE, 0.96);
+    this.text(t0, t1, X(32), Y(44), this.run(this.fitTitle(W - 64 - 160, 20, 0.06), this.c.SANS_SEMI, 20, this.c.TEXT, 0.06), 20);
+    this.text(t0, t1, X(W - 32), Y(44), this.run(`${this.capture.height}P${Math.round(this.a.hz)} · TARGET ${this.a.target}`, this.c.MONO_MED, 13, this.c.DIM), 13, 'r');
     const fps = (v) => fmt1(v), pct = (v) => (v == null ? '–' : `${Math.round(v)}%`);
     const cells = [
-      ['AVG FPS', fps(s.avg_fps), levelColor(s.avg_fps, s.target_fps)],
-      ['1% LOW', fps(s.low_1pct_fps), levelColor(s.low_1pct_fps, s.target_fps)],
-      ['0.1% LOW', fps(s.low_0_1pct_fps), levelColor(s.low_0_1pct_fps, s.target_fps)],
-      ['MISSED', pct(s.frames_missing_target_pct), TEXT],
-      ['PACING EVEN', pct(s.pacing.even_pct), s.pacing.even_pct == null ? TEXT : s.pacing.even_pct >= 95 ? TEXT : s.pacing.even_pct >= 80 ? AMBER : RED],
-      ['STUTTER TIME', `${s.stutter_time_pct.toFixed(1)}%`, s.stutter_time_pct > 5 ? RED : s.stutter_time_pct > 1 ? AMBER : TEXT],
-      ['HITCHES', String(s.hitches.count), s.hitches.count ? RED : TEXT],
-      ['TEARS', String(s.tears.count), s.tears.count ? RED : TEXT],
+      ['AVG FPS', fps(s.avg_fps), this.levelColor(s.avg_fps, s.target_fps)],
+      ['1% LOW', fps(s.low_1pct_fps), this.levelColor(s.low_1pct_fps, s.target_fps)],
+      ['0.1% LOW', fps(s.low_0_1pct_fps), this.levelColor(s.low_0_1pct_fps, s.target_fps)],
+      ['MISSED', pct(s.frames_missing_target_pct), this.c.TEXT],
+      ['PACING EVEN', pct(s.pacing.even_pct), s.pacing.even_pct == null ? this.c.TEXT : s.pacing.even_pct >= 95 ? this.c.TEXT : s.pacing.even_pct >= 80 ? this.c.AMBER : this.c.RED],
+      ['STUTTER TIME', `${s.stutter_time_pct.toFixed(1)}%`, s.stutter_time_pct > 5 ? this.c.RED : s.stutter_time_pct > 1 ? this.c.AMBER : this.c.TEXT],
+      ['HITCHES', String(s.hitches.count), s.hitches.count ? this.c.RED : this.c.TEXT],
+      ['TEARS', String(s.tears.count), s.tears.count ? this.c.RED : this.c.TEXT],
     ];
     const colW = (W - 64) / 4;
     cells.forEach(([label, value, color], i) => {
       const cx = X(32 + (i % 4) * colW), cy = Y(96 + Math.floor(i / 4) * 92);
-      this.text(t0, t1, cx, cy, this.run(label, SANS_MED, 13, FOOT, 0.06), 13);
-      this.text(t0, t1, cx, cy + 44, this.run(value, MONO_SEMI, 40, color, -0.02), 40);
+      this.text(t0, t1, cx, cy, this.run(label, this.c.SANS_MED, 13, this.c.FOOT, 0.06), 13);
+      this.text(t0, t1, cx, cy + 44, this.run(value, this.c.MONO_SEMI, 40, color, -0.02), 40);
     });
     // Histogram: play frames by refreshes held, 1 to 11 and 12+, coloured against the cap.
     const bins = new Array(12).fill(0);
     let total = 0;
     this.a.holdRefreshes.forEach((n, i) => { if (isPlay(this.a.kind[i])) { bins[Math.min(11, Math.max(1, n)) - 1]++; total++; } });
     const hx = X(32), hy = Y(316), hw = W - 64, hh = 150, bw = (hw - 11 * 6) / 12;
-    this.text(t0, t1, hx, hy - 10, this.run('FRAME TIME', SANS_SEMI, 16, LABEL, 0.06) +
-      this.run(` · ${total} FRAMES BY REFRESHES HELD`, SANS_MED, 13, FOOT, 0.04), 16);
+    this.text(t0, t1, hx, hy - 10, this.run('FRAME TIME', this.c.SANS_SEMI, 16, this.c.LABEL, 0.06) +
+      this.run(` · ${total} FRAMES BY REFRESHES HELD`, this.c.SANS_MED, 13, this.c.FOOT, 0.04), 16);
     const peak = Math.max(1, ...bins);
     bins.forEach((c, i) => {
       const n = i + 1, h = Math.max(2, c / peak * hh * 0.85), bx = hx + i * (bw + 6); // room for the share label above the tallest bar
-      this.rects(t0, t1, [[bx, hy + hh - h, bw, h]], ftBarColor(n * refreshMs, targetMs), 1.0);
+      this.rects(t0, t1, [[bx, hy + hh - h, bw, h]], this.ftBarColor(n * refreshMs, targetMs), this.barAlpha(this.ftBarColor(n * refreshMs, targetMs)));
       const lab = n === 12 ? `${fmtMs(12 * refreshMs)}+` : fmtMs(n * refreshMs);
-      this.text(t0, t1, bx + bw / 2, hy + hh + 18, this.run(lab, MONO_MED, 11, n === kRef ? TEXT : FOOT), 11, 'c');
-      if (c) this.text(t0, t1, bx + bw / 2, hy + hh - h - 4, this.run(`${Math.round(100 * c / total)}%`, MONO_MED, 11, LABEL), 11, 'c');
+      this.text(t0, t1, bx + bw / 2, hy + hh + 18, this.run(lab, this.c.MONO_MED, 11, n === kRef ? this.c.TEXT : this.c.FOOT), 11, 'c');
+      if (c) this.text(t0, t1, bx + bw / 2, hy + hh - h - 4, this.run(`${Math.round(100 * c / total)}%`, this.c.MONO_MED, 11, this.c.LABEL), 11, 'c');
     });
     const left = [s.static_holds.seconds && `${s.static_holds.seconds.toFixed(1)} S STILL`, s.loading.seconds && `${s.loading.seconds.toFixed(1)} S LOADING`]
       .filter(Boolean).join(' · ');
-    this.text(t0, t1, X(32), Y(H - 20), this.run(`${s.seconds.toFixed(1)} S OF PLAY${left ? ` · ${left} LEFT OUT` : ''}`, SANS, 13, FOOT), 13);
+    this.text(t0, t1, X(32), Y(H - 20), this.run(`${s.seconds.toFixed(1)} S OF PLAY${left ? ` · ${left} LEFT OUT` : ''}`, this.c.SANS, 13, this.c.FOOT), 13);
   }
 
   /** Run every pass; the events end up in this.lines. Running it again is free. */
@@ -879,8 +931,8 @@ class Overlay {
         'OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ' +
         'ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, ' +
         'Alignment, MarginL, MarginR, MarginV, Encoding',
-      `Style: HUD,${SANS},${(this.px(16) * FS_PER_PX).toFixed(0)},${assColor(TEXT)},` +
-        `${assColor(TEXT)},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1`,
+      `Style: HUD,${this.c.SANS},${(this.px(16) * FS_PER_PX).toFixed(0)},${assColor(this.c.TEXT)},` +
+        `${assColor(this.c.TEXT)},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1`,
       '',
       '[Events]',
       'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
@@ -908,39 +960,39 @@ class StripOverlay extends Overlay {
   drawChrome(D) {
     const S = STRIP, { W, H } = S;
     // Dark fill at 84 % with a faint white hairline edge (shape: fill colour, edge alpha, layer, edge colour, fill alpha).
-    this.shape(0, D, roundedPath(this.px(this.ox), this.px(this.oy), this.px(W), this.px(H), this.px(16)), PANEL, 0.08, 0, 0xFFFFFF, 0.84);
-    for (const x of S.divs) this.rects(0, D, [[x, 18, 1, 40]], LINE, 1.0, 1);
+    this.shape(0, D, roundedPath(this.px(this.ox), this.px(this.oy), this.px(W), this.px(H), this.px(16)), this.c.PANEL, 0.08, 0, 0xFFFFFF, 0.84);
+    for (const x of S.divs) this.rects(0, D, [[x, 18, 1, 40]], this.c.LINE, this.c.LINE_A, 1);
     ['FRAME', 'AVG 10 S', '1% LOW', 'MAX'].forEach((s, i) => {
-      this.text(0, D, S.stats + i * S.col, 31, this.run(s, SANS_MED, 11, FOOT, 0.06), 11);
+      this.text(0, D, S.stats + i * S.col, 31, this.run(s, this.c.SANS_MED, 11, this.c.FOOT, 0.06), 11);
     });
-    this.text(0, D, S.pacing, 31, this.run('PACING 10 S', SANS_MED, 11, FOOT, 0.06), 11);
+    this.text(0, D, S.pacing, 31, this.run('PACING 10 S', this.c.SANS_MED, 11, this.c.FOOT, 0.06), 11);
     this.drawPills(D, S.right, 16, 13);
-    this.text(0, D, S.right, 58, this.run(this.fitTitle(196, 11, 0.08), SANS_SEMI, 11, DIM, 0.08), 11, 'r');
+    this.text(0, D, S.right, 58, this.run(this.fitTitle(196, 11, 0.08), this.c.SANS_SEMI, 11, this.c.DIM, 0.08), 11, 'r');
     this.drawExtras(D);
   }
 
   drawNumbers(tq, tEnd) {
     const n = this.numbersAt(tq), S = STRIP, { target } = this.m;
     const heroS = fmt0(n.hero);
-    this.text(tq, tEnd, S.heroX, 54, this.run(heroS, MONO_SEMI, 46, n.hero == null ? TEXT : levelColor(n.hero, target), -0.03), 46);
+    this.text(tq, tEnd, S.heroX, 54, this.run(heroS, this.c.HERO || this.c.MONO_SEMI, 46, n.hero == null ? this.c.TEXT : this.levelColor(n.hero, target), -0.03), 46);
     const lx = S.heroX + monoW(heroS, 46, -0.03) + 8;
-    this.slot('heroFps', 3, tq, this.textBody(lx, 37, this.run('FPS', SANS_SEMI, 13, LABEL, 0.06), 13));
-    this.slot('heroSub', 3, tq, this.textBody(lx, 54, this.run('0.5 S', SANS_MED, 11, FOOT, 0.06), 11));
-    this.text(tq, tEnd, S.stats + S.col, 56, this.run(fmt1(n.avg), MONO_SEMI, 22, n.avg == null ? TEXT : levelColor(n.avg, target)), 22);
-    this.text(tq, tEnd, S.stats + 2 * S.col, 56, this.run(fmt1(n.low), MONO_SEMI, 22, n.low == null ? TEXT : levelColor(n.low, target)), 22);
+    this.slot('heroFps', 3, tq, this.textBody(lx, 37, this.run('FPS', this.c.SANS_SEMI, 13, this.c.LABEL, 0.06), 13));
+    this.slot('heroSub', 3, tq, this.textBody(lx, 54, this.run('0.5 S', this.c.SANS_MED, 11, this.c.FOOT, 0.06), 11));
+    this.text(tq, tEnd, S.stats + S.col, 56, this.run(fmt1(n.avg), this.c.MONO_SEMI, 22, n.avg == null ? this.c.TEXT : this.levelColor(n.avg, target)), 22);
+    this.text(tq, tEnd, S.stats + 2 * S.col, 56, this.run(fmt1(n.low), this.c.MONO_SEMI, 22, n.low == null ? this.c.TEXT : this.levelColor(n.low, target)), 22);
     const p = n.pacing;
     if (!p) return;
     const sh = (v) => v / p.n, pct = (v) => `${Math.round(sh(v) * 100)}%`;
-    this.stackedBar(tq, tEnd, [[sh(p.on), BLUE], [sh(p.late), AMBER], [sh(p.stall), RED]], S.pacing, 40, 120, 6, false);
-    this.text(tq, tEnd, S.pacing, 60, this.run(pct(p.on), MONO_SEMI, 11, TEXT), 11);
-    this.text(tq, tEnd, S.pacing + 120, 60, this.run(`${pct(p.late)} · ${pct(p.stall)}`, MONO_MED, 11, p.stall ? RED : FOOT), 11, 'r');
+    this.stackedBar(tq, tEnd, [[sh(p.on), this.c.BLUE], [sh(p.late), this.c.AMBER], [sh(p.stall), this.c.RED]], S.pacing, 40, 120, 6, false);
+    this.text(tq, tEnd, S.pacing, 60, this.run(pct(p.on), this.c.MONO_SEMI, 11, this.c.TEXT), 11);
+    this.text(tq, tEnd, S.pacing + 120, 60, this.run(`${pct(p.late)} · ${pct(p.stall)}`, this.c.MONO_MED, 11, p.stall ? this.c.RED : this.c.FOOT), 11, 'r');
   }
 
   drawFrame(tt, tEnd) {
     const f = this.frameAt(tt), S = STRIP, { targetMs } = this.m;
     this.slot('badge', 3, tt, f.stalled ? this.textBody(S.stats + 3 * S.col, 31,
-      this.run(HOLD_NAMES[f.kind] || 'STALL', SANS_SEMI, 11, f.stallKind === 'hitch' ? RED : DIM, 0.06), 11) : null);
-    const ms = (v) => this.run(fmt1(v), MONO_SEMI, 22, v == null ? TEXT : ftTextColor(v, targetMs)) + this.run(' ms', MONO_SEMI, 11, DIM);
+      this.run(HOLD_NAMES[f.kind] || 'STALL', this.c.SANS_SEMI, 11, f.stallKind === 'hitch' ? this.c.RED : this.c.DIM, 0.06), 11) : null);
+    const ms = (v) => this.run(fmt1(v), this.c.MONO_SEMI, 22, v == null ? this.c.TEXT : this.ftTextColor(v, targetMs)) + this.run(' ms', this.c.MONO_SEMI, 11, this.c.DIM);
     this.slot('last', 3, tt, this.textBody(S.stats, 56, ms(f.lastMs), 22));
     this.slot('ftMax', 3, tt, this.textBody(S.stats + 3 * S.col, 56, ms(f.ftMax), 22));
     this.ftChart(tt, f, { key: 'sft', x: S.chart, top: 18, w: 269, h: 40, slots: FT_SHOW + 1 });
@@ -959,61 +1011,61 @@ class GlassOverlay extends Overlay {
   drawChrome(D) {
     const G = GLASS, { target, yMax } = this.m;
     for (const [y, h] of G.tiles) {
-      this.shape(0, D, roundedPath(this.px(this.ox), this.px(this.oy + y), this.px(G.W), this.px(h), this.px(14)), PANEL, 0.08, 0, 0xFFFFFF, 0.74);
+      this.shape(0, D, roundedPath(this.px(this.ox), this.px(this.oy + y), this.px(G.W), this.px(h), this.px(14)), this.c.PANEL, 0.08, 0, 0xFFFFFF, 0.74);
     }
     const pillsW = this.drawPills(D, G.W - 16, 14, 11);
-    this.text(0, D, 18, 29, this.run(this.fitTitle(G.W - 36 - pillsW, 12, 0.08), SANS_SEMI, 12, DIM, 0.08), 12);
-    this.text(0, D, G.lineX, 128, this.run('LAST 10 S', SANS_MED, 10, FOOT, 0.06), 10);
+    this.text(0, D, 18, 29, this.run(this.fitTitle(G.W - 36 - pillsW, 12, 0.08), this.c.SANS_SEMI, 12, this.c.DIM, 0.08), 12);
+    this.text(0, D, G.lineX, 128, this.run('LAST 10 S', this.c.SANS_MED, 10, this.c.FOOT, 0.06), 10);
     const lw = G.lineR - G.lineX;
-    this.rects(0, D, [[G.lineX, G.lineY, lw, 1]], LINE, 1.0);
-    this.rects(0, D, [[G.lineX, G.lineY - G.lineH * (target / yMax), lw, 1]], TEXT, 0.45, 3);
+    this.rects(0, D, [[G.lineX, G.lineY, lw, 1]], this.c.LINE, this.c.LINE_A);
+    this.rects(0, D, [[G.lineX, G.lineY - G.lineH * (target / yMax), lw, 1]], this.c.TEXT, 0.45, 3);
     // MISSED is right-aligned at the tile edge so a long FRAME value has room.
     ['AVG 10 S', '1% LOW', 'FRAME', 'MISSED'].forEach((s, i) => {
-      this.text(0, D, i === 3 ? G.W - 16 : G.colX[i], 172, this.run(s, SANS_MED, 11, FOOT, 0.06), 11, i === 3 ? 'r' : 'l');
+      this.text(0, D, i === 3 ? G.W - 16 : G.colX[i], 172, this.run(s, this.c.SANS_MED, 11, this.c.FOOT, 0.06), 11, i === 3 ? 'r' : 'l');
     });
-    this.text(0, D, 16, 256, this.run('FRAME TIME', SANS_SEMI, 12, LABEL, 0.06), 12);
+    this.text(0, D, 16, 256, this.run('FRAME TIME', this.c.SANS_SEMI, 12, this.c.LABEL, 0.06), 12);
     this.drawExtras(D);
   }
 
   drawNumbers(tq, tEnd) {
     const n = this.numbersAt(tq), G = GLASS, { target, yMax } = this.m;
     const heroS = fmt0(n.hero);
-    this.text(tq, tEnd, 16, 114, this.run(heroS, MONO, 76, n.hero == null ? TEXT : levelColor(n.hero, target), -0.05), 76);
+    this.text(tq, tEnd, 16, 114, this.run(heroS, this.c.HERO || this.c.MONO, 76, n.hero == null ? this.c.TEXT : this.levelColor(n.hero, target), -0.05), 76);
     const lx = 16 + monoW(heroS, 76, -0.05) + 4;
-    this.slot('heroFps', 3, tq, this.textBody(lx, 90, this.run('FPS', SANS_SEMI, 13, LABEL, 0.06), 13));
-    this.slot('heroSub', 3, tq, this.textBody(lx, 108, this.run('0.5 S', SANS_MED, 11, FOOT, 0.06), 11));
+    this.slot('heroFps', 3, tq, this.textBody(lx, 90, this.run('FPS', this.c.SANS_SEMI, 13, this.c.LABEL, 0.06), 13));
+    this.slot('heroSub', 3, tq, this.textBody(lx, 108, this.run('0.5 S', this.c.SANS_MED, 11, this.c.FOOT, 0.06), 11));
     // The 10 s FPS line: a flat-filled area under it and the line as thin quads (libass has no gradients).
     if (n.bars.length > 1) {
       const lw = G.lineR - G.lineX, { ox, oy } = this, X = (v) => f1(this.px(ox + v)), Y = (v) => f1(this.px(oy + v));
       const pts = n.bars.map((b, i) => [G.lineX + i * lw / (FPS_BARS - 1), G.lineY - Math.min(1, b.fps / yMax) * G.lineH]);
       const area = `m ${X(pts[0][0])} ${Y(G.lineY)} l ` + pts.map(([x, y]) => `${X(x)} ${Y(y)}`).join(' ') + ` ${X(pts[pts.length - 1][0])} ${Y(G.lineY)}`;
-      this.shape(tq, tEnd, area, BLUE, 0.25, 2);
+      this.shape(tq, tEnd, area, this.c.BLUE, 0.25, 2);
       const line = pts.slice(1).map(([x, y], i) => {
         const [x0, y0] = pts[i];
         return `m ${X(x0)} ${Y(y0 - 1)} l ${X(x)} ${Y(y - 1)} ${X(x)} ${Y(y + 1)} ${X(x0)} ${Y(y0 + 1)}`;
       }).join(' ');
-      this.shape(tq, tEnd, line, BLUE, 1.0, 2);
-      this.text(tq, tEnd, G.lineR, 128, this.run(`MIN ${fmt0(n.mn)} · MAX ${fmt0(n.mx)}`, MONO_MED, 10, FOOT), 10, 'r');
+      this.shape(tq, tEnd, line, this.c.BLUE, 1.0, 2);
+      this.text(tq, tEnd, G.lineR, 128, this.run(`MIN ${fmt0(n.mn)} · MAX ${fmt0(n.mx)}`, this.c.MONO_MED, 10, this.c.FOOT), 10, 'r');
     }
-    const val = (i, s, col) => this.text(tq, tEnd, G.colX[i], 203, this.run(s, MONO_SEMI, 22, col), 22);
-    val(0, fmt1(n.avg), n.avg == null ? TEXT : levelColor(n.avg, target));
-    val(1, fmt1(n.low), n.low == null ? TEXT : levelColor(n.low, target));
-    this.text(tq, tEnd, G.W - 16, 203, this.run(n.missed == null ? '–' : `${Math.round(n.missed * 100)}%`, MONO_SEMI, 22, TEXT), 22, 'r');
+    const val = (i, s, col) => this.text(tq, tEnd, G.colX[i], 203, this.run(s, this.c.MONO_SEMI, 22, col), 22);
+    val(0, fmt1(n.avg), n.avg == null ? this.c.TEXT : this.levelColor(n.avg, target));
+    val(1, fmt1(n.low), n.low == null ? this.c.TEXT : this.levelColor(n.low, target));
+    this.text(tq, tEnd, G.W - 16, 203, this.run(n.missed == null ? '–' : `${Math.round(n.missed * 100)}%`, this.c.MONO_SEMI, 22, this.c.TEXT), 22, 'r');
     const p = n.pacing;
     if (!p) return;
     const sh = (v) => v / p.n, pct = (v) => `${Math.round(sh(v) * 100)}%`;
-    this.stackedBar(tq, tEnd, [[sh(p.on), BLUE], [sh(p.late), AMBER], [sh(p.stall), RED]], 16, 326, G.W - 32, 5, false);
-    this.text(tq, tEnd, 16, 345, this.run(`ON TIME ${pct(p.on)}`, MONO_MED, 10, FOOT), 10);
-    this.text(tq, tEnd, G.W - 16, 345, this.run(`LATE ${pct(p.late)} · STALL ${pct(p.stall)}`, MONO_MED, 10, p.stall ? RED : FOOT), 10, 'r');
+    this.stackedBar(tq, tEnd, [[sh(p.on), this.c.BLUE], [sh(p.late), this.c.AMBER], [sh(p.stall), this.c.RED]], 16, 326, G.W - 32, 5, false);
+    this.text(tq, tEnd, 16, 345, this.run(`ON TIME ${pct(p.on)}`, this.c.MONO_MED, 10, this.c.FOOT), 10);
+    this.text(tq, tEnd, G.W - 16, 345, this.run(`LATE ${pct(p.late)} · STALL ${pct(p.stall)}`, this.c.MONO_MED, 10, p.stall ? this.c.RED : this.c.FOOT), 10, 'r');
   }
 
   drawFrame(tt, tEnd) {
     const f = this.frameAt(tt), G = GLASS, { targetMs } = this.m;
     this.slot('last', 3, tt, this.textBody(G.colX[2], 203,
-      this.run(fmt1(f.lastMs), MONO_SEMI, 22, f.lastMs == null ? TEXT : ftTextColor(f.lastMs, targetMs)) + this.run(' ms', MONO_SEMI, 11, DIM), 22));
+      this.run(fmt1(f.lastMs), this.c.MONO_SEMI, 22, f.lastMs == null ? this.c.TEXT : this.ftTextColor(f.lastMs, targetMs)) + this.run(' ms', this.c.MONO_SEMI, 11, this.c.DIM), 22));
     this.slot('ftMax', 3, tt, this.textBody(G.W - 16, 256,
-      this.run('MAX ', SANS_SEMI, 12, LABEL, 0.06) + this.run(fmt1(f.ftMax), MONO_SEMI, 12, f.ftMax == null ? TEXT : ftTextColor(f.ftMax, targetMs)) +
-      this.run(' ms', MONO_SEMI, 10, DIM), 12, 'r'));
+      this.run('MAX ', this.c.SANS_SEMI, 12, this.c.LABEL, 0.06) + this.run(fmt1(f.ftMax), this.c.MONO_SEMI, 12, f.ftMax == null ? this.c.TEXT : this.ftTextColor(f.ftMax, targetMs)) +
+      this.run(' ms', this.c.MONO_SEMI, 10, this.c.DIM), 12, 'r'));
     this.ftChart(tt, f, { key: 'gft', x: 16, top: 266, w: G.W - 32, h: 50, slots: FT_SHOW + 1 });
     this.drawLongGraphTick(tt, f);
   }
@@ -1052,5 +1104,5 @@ const CAPTION_POSITIONS = ['top-left', 'top-center', 'top-right', 'bottom-left',
 module.exports = {
   Overlay, StripOverlay, GlassOverlay, NoneOverlay, createOverlay, STYLES, END_CARD_S,
   assFilter, filterPath, assTime, assColor, tc, weightedFrames, POSITIONS, CAPTION_POSITIONS, LAYOUT,
-  COLORS: Object.freeze({ PANEL, LINE, TEXT, LABEL, DIM, FOOT, BLUE, AMBER, RED }),
+  THEMES, THEME_NAMES, COLORS: THEMES.classic,
 };

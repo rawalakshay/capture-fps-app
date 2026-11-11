@@ -4,16 +4,20 @@ const $ = (id) => document.getElementById(id);
 const SVG = 'http://www.w3.org/2000/svg';
 
 const state = {
-  queue: [],          // { path, name, stem, info, defaultOutDir, status, result, opts, error }
+  queue: [],          // this session's recordings: { path, name, stem, info, size, defaultOutDir, status, result, opts, error, note }
+  library: [],        // every recording ever added, persisted; see upsertLibrary()
+  current: null,      // the queue item open in the Workspace
+  runningItem: null,  // the queue item a job is working on
+  run: { done: 0 },   // finished items of the current queue run
   outBase: null,      // a folder the user chose; null = next to each video
   toolsOk: false,
   running: false,
   cancelled: false,
-  result: null,
+  result: null,       // state.current's result, for the actions that read it
   opts: null,
   lastAnalysed: null, // video path the main process can render or preview again
   previewAt: 0,       // seconds into the analysed span
-  range: null,        // chart selection [start, end] in clip seconds, mirrored in the Start and End fields
+  range: null,        // timeline selection [start, end] in clip seconds, mirrored in the In and Out fields
   gpu: false,
   gpuReady: Promise.resolve(),
 };
@@ -32,21 +36,41 @@ function fmtStamp(s) {
   return `${m}:${(s - m * 60).toFixed(2).padStart(5, '0')}`;
 }
 
+function fmtSize(bytes) {
+  if (!bytes) return null;
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+}
+
+function fmtAgo(ts) {
+  if (!ts) return '';
+  const d = (Date.now() - ts) / 1000;
+  if (d < 90) return 'just now';
+  if (d < 3600) return `${Math.round(d / 60)} min ago`;
+  if (d < 86400) return `${Math.round(d / 3600)} h ago`;
+  if (d < 6 * 86400) return new Date(ts).toLocaleDateString(undefined, { weekday: 'short' });
+  return new Date(ts).toLocaleDateString();
+}
+
+const fmtFormat = (info) => `${info.height}p${Math.round(info.hz)}`;
+
 function level(fps, target) {
   if (fps >= 0.95 * target) return 'ok';
   if (fps >= 0.8 * target) return 'warn';
   return 'bad';
 }
 
-const STEP_OF_VIEW = { 'view-empty': 1, 'view-progress': 2, 'view-error': 2, 'view-results': 3 };
+const VIEWS = ['view-library', 'view-work', 'view-compare', 'view-error'];
 function show(view) {
-  for (const id of ['view-empty', 'view-progress', 'view-error', 'view-results']) $(id).hidden = id !== view;
-  for (const li of $('stepbar').children) {
-    const n = Number(li.dataset.s);
-    li.classList.toggle('on', n === STEP_OF_VIEW[view]);
-    li.classList.toggle('done', n < STEP_OF_VIEW[view]);
-  }
+  for (const id of VIEWS) $(id).hidden = id !== view;
+  $('inspector').hidden = view !== 'view-work';
+  $('nav-library').classList.toggle('on', view === 'view-library');
+  $('nav-compare').classList.toggle('on', view === 'view-compare');
+  $('rail-dot').hidden = !state.running || view === 'view-library';
+  // The charts had no size while hidden.
+  if (view === 'view-work') { drawChart(); fitFrame(); }
+  if (view === 'view-compare') drawCompareChart();
 }
+const viewIs = (id) => !$(id).hidden;
 
 function el(tag, attrs = {}, text) {
   const n = document.createElementNS(SVG, tag);
@@ -55,12 +79,35 @@ function el(tag, attrs = {}, text) {
   return n;
 }
 
+function node(tag, className, text) {
+  const n = document.createElement(tag);
+  if (className) n.className = className;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+/** The items the next Analyse would run: everything waiting, plus the open recording. */
+function todoItems() {
+  return state.queue.filter((q) => q.status === 'waiting' || q === state.current);
+}
+
 function updateRunButton() {
-  const ready = state.toolsOk && state.queue.length > 0;
+  const todo = todoItems();
+  const ready = state.toolsOk && todo.length > 0;
   $('run').disabled = !ready || state.running;
+  $('run').hidden = state.running;
+  $('cancel').hidden = !state.running;
+  $('run').textContent = todo.length > 1 ? `Analyse ${todo.length} recordings` : state.range ? 'Analyse selection' : 'Analyse';
+  $('analyse-sel').disabled = $('run').disabled;
   $('out-change').disabled = !state.queue.length || state.running;
-  $('pick').disabled = state.running;
-  $('pick2').disabled = state.running;
+  $('run-banner').hidden = !state.running;
+  $('prog-line').hidden = !state.running;
+  $('queue-run').hidden = state.running || !state.toolsOk || !state.queue.some((q) => q.status === 'waiting');
+  $('queue-stop').hidden = !state.running;
+  $('rail-dot').hidden = !state.running || viewIs('view-library');
+  const out = state.current ? (state.outBase || state.current.defaultOutDir) : 'Next to the video';
+  $('out-path').textContent = out;
+  $('out-path').title = out;
   // Render and preview need the analysis the main process still holds: the last one.
   const current = state.result && state.result.video === state.lastAnalysed;
   for (const id of ['render-again', 'preview']) {
@@ -69,12 +116,13 @@ function updateRunButton() {
   }
   $('copy-summary').disabled = !state.result;
   const hint = $('run-hint');
+  hint.classList.remove('lv-bad');
   if (!state.toolsOk) hint.textContent = 'ffmpeg is not ready';
-  else if (!state.queue.length) hint.textContent = 'Choose a recording first';
   else if (state.running) hint.textContent = 'Working…';
+  else if (!todo.length) hint.textContent = 'Choose a recording first';
   else { // measuring takes about the clip's length, rendering about as much again
     const a = parseTime($('opt-start').value) || 0, b = parseTime($('opt-end').value) || Infinity;
-    const secs = state.queue.reduce((t, q) => t + Math.max(0, Math.min(b, q.info.duration) - a), 0) * ($('opt-render').checked ? 2 : 1);
+    const secs = todo.reduce((t, q) => t + Math.max(0, Math.min(b, q.info.duration) - a), 0) * ($('opt-render').checked ? 2 : 1);
     hint.textContent = `Ctrl+Enter · about ${fmtDuration(secs)}`;
   }
 }
@@ -100,16 +148,16 @@ function radioValue(name) {
 // ---------- tools ----------
 
 async function checkTools() {
-  window.api.version().then((v) => { $('version').textContent = `v${v}`; });
+  window.api.version().then((v) => { $('version').textContent = $('version-main').textContent = `v${v}`; });
   const t = await window.api.tools();
   state.toolsOk = t.ok;
   const n = $('tools');
   if (t.ok) {
     n.textContent = 'ffmpeg ready';
-    n.className = 'tools ok';
+    n.className = 'tools mono ok';
   } else {
     n.textContent = t.reason;
-    n.className = 'tools bad';
+    n.className = 'tools mono bad';
     n.title = 'Install it with: winget install Gyan.FFmpeg, then restart the app.';
   }
   updateRunButton();
@@ -122,7 +170,7 @@ async function checkGpu() {
   if (g.nvenc) {
     $('enc-gpu-sub').textContent = 'NVENC is about 5× faster than x264.';
     $('enc-gpu').checked = true; // the default when the GPU can do it
-    $('tools').textContent = 'ffmpeg ready · NVIDIA GPU';
+    $('tools').textContent = 'ffmpeg ready · NVENC';
   } else {
     $('enc-gpu-sub').textContent = `No NVIDIA GPU here: ${g.reason || 'x264 only'}.`;
     $('enc-gpu').disabled = true;
@@ -141,6 +189,152 @@ async function checkGpu() {
   }
 }
 
+// ---------- library ----------
+
+function loadLibrary() {
+  try { return JSON.parse(localStorage.getItem('library') || '[]') || []; } catch (_) { return []; }
+}
+function saveLibrary() {
+  try { localStorage.setItem('library', JSON.stringify(state.library)); } catch (_) { /* ignore: the session list still works */ }
+}
+const libEntry = (path) => state.library.find((e) => e.path === path);
+
+/** One library entry per path, newest first; a queue item's result adds the score fields the cards show. */
+function upsertLibrary(item, extra = {}) {
+  let e = libEntry(item.path);
+  if (!e) {
+    e = { path: item.path, name: item.name, addedAt: Date.now() };
+    state.library.unshift(e);
+  }
+  Object.assign(e, { name: item.name, info: item.info || e.info, size: item.size || e.size, error: null }, extra);
+  const r = item.result;
+  if (r) {
+    const s = r.summary;
+    Object.assign(e, {
+      analysedAt: Date.now(), held: Math.max(0, Math.min(100, Math.round(100 - s.frames_missing_target_pct))), target: s.target_fps,
+      avg: s.avg_fps, low1: s.low_1pct_fps, hitches: s.hitches.count, seconds: s.capture.seconds,
+      outDir: r.outDir, overlayVideo: r.overlayVideo, start: (item.opts && item.opts.start) || null, end: (item.opts && item.opts.end) || null,
+    });
+  }
+  saveLibrary();
+}
+
+const libNodes = new Map(); // path -> the card parts a progress event updates
+
+function renderLibrary() {
+  const grid = $('lib-grid');
+  grid.replaceChildren();
+  libNodes.clear();
+  const list = state.library;
+  $('lib-empty').hidden = list.length > 0;
+  const running = state.queue.filter((q) => q.status === 'measuring' || q.status === 'waiting').length;
+  $('lib-count').textContent = !list.length ? 'No recordings yet'
+    : `${list.length} recording${list.length === 1 ? '' : 's'}` + (running ? ` · ${running} in queue` : '');
+  for (const e of list) grid.appendChild(cardFor(e));
+  updateQueueBar();
+}
+
+const STEP_NAME = { measure: 'Measuring', analyse: 'Analysing', render: 'Rendering' };
+
+function cardFor(e) {
+  const q = state.queue.find((x) => x.path === e.path);
+  const status = q ? q.status : e.error ? 'error' : e.analysedAt ? 'done' : 'idle';
+  const card = node('article', `card${status === 'measuring' ? ' running' : status === 'error' ? ' failed' : ''}`);
+  const main = node('button', 'card-main');
+  main.type = 'button';
+  main.title = e.path;
+  const thumb = node('div', 'thumb');
+  if (e.thumb) {
+    const img = node('img');
+    img.src = e.thumb;
+    img.alt = '';
+    thumb.appendChild(img);
+  } else if (e.held != null) {
+    const hero = node('div', 'hero');
+    hero.append(node('b', 'mono', String(Math.round(e.avg))), node('span', '', `1% LOW ${Math.round(e.low1)}`));
+    thumb.appendChild(hero);
+  }
+  const badge = node('span', 'badge');
+  if (status === 'measuring') { badge.className = 'badge lv-ok'; badge.append(node('span', 'dot dot-run'), 'Measuring'); }
+  else if (status === 'error') { badge.className = 'badge lv-bad'; badge.textContent = 'Failed'; }
+  else if (e.held != null) { badge.className = `badge lv-${e.held >= 95 ? 'ok' : e.held >= 80 ? 'warn' : 'bad'}`; badge.textContent = `${e.held}% on ${e.target}`; }
+  else badge.hidden = true;
+  const bar = node('div', 'thumb-bar');
+  bar.hidden = status !== 'measuring';
+  const fill = node('i');
+  bar.appendChild(fill);
+  thumb.append(badge, bar, node('span', 'dur mono', e.info ? fmtDuration(e.info.duration) : '—'));
+  const text = node('div', 'card-text');
+  text.append(node('div', 'card-name', e.name));
+  const meta = [e.info ? fmtFormat(e.info) : 'unknown', fmtSize(e.size), fmtAgo(e.analysedAt || e.addedAt)].filter(Boolean).join(' · ');
+  text.append(node('div', 'card-meta mono', meta));
+  main.append(thumb, text);
+  main.addEventListener('click', () => openEntry(e));
+  const st = node('div', 'card-st');
+  const stText = node('span');
+  const words = {
+    waiting: 'Waiting in queue', measuring: 'Measuring…', cancelled: 'Cancelled', idle: 'Not analysed yet',
+    error: `Failed: ${(q && q.error) || e.error || 'unknown error'}`,
+    done: e.overlayVideo ? `Rendered · ${e.hitches ? `${e.hitches} hitch${e.hitches === 1 ? '' : 'es'}` : 'no hitches'}` : 'Analysed · not rendered',
+  };
+  if (status === 'done' && e.overlayVideo) {
+    const ok = el('svg', { class: 'ico', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
+    ok.appendChild(el('path', { d: 'M5 12l5 5L20 7' }));
+    st.appendChild(ok);
+  }
+  stText.textContent = words[status];
+  stText.title = words[status];
+  st.appendChild(stText);
+  if (status === 'error' || status === 'cancelled') {
+    const retry = node('button', 'btn btn-xs', 'Retry');
+    retry.type = 'button';
+    retry.addEventListener('click', () => retryEntry(e));
+    st.appendChild(retry);
+  }
+  card.append(main, st);
+  libNodes.set(e.path, { status: stText, badge, fill });
+  return card;
+}
+
+function updateQueueBar() {
+  const waiting = state.queue.filter((q) => q.status === 'waiting').length;
+  $('queue-bar').hidden = !state.running && !waiting;
+  $('queue-dot').hidden = !state.running;
+  $('queue-head').textContent = state.running ? 'Running queue' : 'Queue';
+  if (!state.running) {
+    $('queue-text').textContent = `${waiting} waiting · open one and press Analyse, or run them all with the current options`;
+    $('queue-fill').style.width = '0';
+  }
+}
+
+/** Re-probe a failed or cancelled recording and run it. */
+async function retryEntry(e) {
+  const q = state.queue.find((x) => x.path === e.path);
+  if (q) { q.status = 'waiting'; q.error = null; } else await addVideos([e.path], { open: false });
+  if (!state.queue.some((x) => x.path === e.path)) return; // the probe failed again; the card says why
+  renderLibrary();
+  if (!state.running) $('run').click();
+}
+
+/** Open a card: this session's item, or an earlier run read back from its output folder. */
+async function openEntry(e) {
+  let q = state.queue.find((x) => x.path === e.path);
+  if (!q) {
+    await addVideos([e.path], { open: false });
+    q = state.queue.find((x) => x.path === e.path);
+    if (!q) return;
+    if (e.outDir) {
+      const r = await window.api.loadResult(e.outDir);
+      if (r.ok) {
+        q.result = { video: e.path, outDir: e.outDir, info: q.info, summary: r.result.summary, perSecond: r.result.perSecond, overlayVideo: e.overlayVideo || null };
+        q.opts = { start: e.start || null, end: e.end || null };
+        q.status = 'done';
+      }
+    }
+  }
+  openItem(q);
+}
+
 // ---------- choosing a video ----------
 
 /** Where an item's files go: the chosen folder (a subfolder each when there are several), or next to the video. */
@@ -149,89 +343,40 @@ function itemOutDir(item) {
   return state.queue.length > 1 ? `${state.outBase}\\${item.stem}_fps` : state.outBase;
 }
 
-function renderQueue() {
-  const ul = $('queue');
-  ul.replaceChildren();
-  ul.hidden = state.queue.length < 2;
-  const words = { waiting: 'waiting', measuring: 'working…', done: 'done', error: 'failed', cancelled: 'cancelled' };
-  for (const item of state.queue) {
-    const li = document.createElement('li');
-    const a = document.createElement('span');
-    a.className = 'q-name';
-    a.textContent = item.name;
-    a.title = item.path;
-    const b = document.createElement('span');
-    b.className = `q-status ${item.status}`;
-    b.textContent = words[item.status];
-    li.append(a, b);
-    ul.appendChild(li);
-  }
-  const first = state.queue[0];
-  $('pick').classList.toggle('has-file', Boolean(first));
-  $('file-name').textContent = first ? first.name + (state.queue.length > 1 ? ` + ${state.queue.length - 1} more` : '') : 'Choose videos…';
-  const out = first ? (state.outBase || first.defaultOutDir) : 'Next to the video';
-  $('out-path').textContent = out;
-  $('out-path').title = out;
-  $('drop-title').textContent = first ? (state.queue.length > 1 ? `${state.queue.length} recordings queued` : first.name) : 'Drop recordings here';
-  $('pick2').textContent = first ? 'Choose other videos' : 'Choose videos';
-  $('side').classList.toggle('no-file', !first);
-  renderRecent();
-  syncSummaries();
-  // Several clips keep their own file names as the overlay title.
-  $('opt-title').disabled = state.queue.length > 1;
-  $('opt-title').placeholder = state.queue.length > 1 ? 'Each clip uses its file name' : first ? first.stem : 'File name';
-  syncUpscaler();
-  updateRunButton();
-}
-
-/** Probe each file; files already queued are skipped, unreadable ones are reported and dropped. */
-async function addVideos(paths) {
+/** Probe each file; files already queued are skipped, unreadable ones get a failed card. The first new one opens. */
+async function addVideos(paths, { open = true } = {}) {
   paths = (paths || []).filter((p) => p && !state.queue.some((q) => q.path === p));
-  if (!paths.length || state.running) return;
-  $('long-note').hidden = true;
-  $('file-meta').textContent = 'Reading…';
-  $('file-meta').className = 'file-meta';
-  const errors = [];
+  if (!paths.length) return;
+  const added = [];
   for (const p of paths) {
     const r = await window.api.probe(p);
-    if (!r.ok) { errors.push(`${fileName(p)}: ${r.error}`); continue; }
-    state.queue.push({ path: p, name: r.name, stem: r.name.replace(/\.[^.]+$/, ''), info: r.info, targets: r.targets, defaultOutDir: r.outDir, status: 'waiting', result: null });
-    rememberRecent(p);
+    if (!r.ok) {
+      upsertLibrary({ path: p, name: fileName(p) }, { error: r.error });
+      continue;
+    }
+    const item = { path: p, name: r.name, stem: r.name.replace(/\.[^.]+$/, ''), info: r.info, size: r.size, targets: r.targets, defaultOutDir: r.outDir, status: 'waiting', result: null };
+    state.queue.push(item);
+    upsertLibrary(item);
+    added.push(item);
   }
-  const first = state.queue[0];
-  if (first) {
-    const i = first.info;
-    $('file-meta').textContent = `${i.width}×${i.height} · ${i.hz.toFixed(2)} Hz · ${fmtDuration(i.duration)}` +
-      (state.queue.length > 1 ? ` · ${state.queue.length} files` : '');
-    $('drop-sub').textContent = oddHz(i.hz)
-      ? `Recorded at ${i.hz.toFixed(2)} fps. The game's frame rate is measured against this; record at the console's refresh rate (60 or 120) for best results.`
-      : 'Ready. Set any options on the left, then press Analyse.';
-    setTargets(first.targets);
-  }
-  if (errors.length) {
-    $('file-meta').textContent = errors.join(' · ');
-    $('file-meta').className = 'file-meta err';
-  }
-  renderQueue();
-  if (!state.running) show('view-empty');
+  renderLibrary();
+  updateRunButton();
+  if (open && added.length) openItem(added[0]);
 }
 
 async function pickVideo() {
   const paths = await window.api.pickVideo();
-  if (paths.length) {
-    if (!state.running) { state.queue = []; renderQueue(); } // a fresh pick replaces the list
-    addVideos(paths);
-  }
+  if (paths.length) addVideos(paths);
 }
 
 $('pick').addEventListener('click', pickVideo);
 $('pick2').addEventListener('click', pickVideo);
 
 $('out-change').addEventListener('click', async () => {
-  const p = await window.api.pickFolder(state.outBase || (state.queue[0] && state.queue[0].defaultOutDir));
+  const p = await window.api.pickFolder(state.outBase || (state.current && state.current.defaultOutDir));
   if (p) {
     state.outBase = p;
-    renderQueue();
+    updateRunButton();
   }
 });
 
@@ -257,23 +402,23 @@ document.addEventListener('drop', (e) => {
 
 $('opt-render').addEventListener('change', () => {
   const on = $('opt-render').checked;
-  $('video-opts').hidden = $('tab-look').hidden = $('tab-export').hidden = !on;
-  if (!on) selectTab('measure');
+  $('sec-overlay').hidden = $('sec-export').hidden = !on;
   updateRunButton();
 });
 
-// ---------- option tabs ----------
+// ---------- navigation ----------
 
-function selectTab(name) {
-  for (const b of $('tabs').children) b.setAttribute('aria-selected', String(b.id === `tab-${name}`));
-  for (const p of document.querySelectorAll('#panes .pane')) p.hidden = p.id !== `pane-${name}`;
-}
-$('tabs').addEventListener('click', (e) => {
-  const b = e.target.closest('[role="tab"]');
-  if (b) selectTab(b.id.slice(4));
-});
+$('nav-library').addEventListener('click', () => { if (viewIs('view-work') || viewIs('view-compare') || viewIs('view-error')) show('view-library'); renderLibrary(); });
+$('back').addEventListener('click', () => { renderLibrary(); show('view-library'); });
+$('nav-compare').addEventListener('click', openCompare);
+$('compare-open').addEventListener('click', openCompare);
+$('queue-run').addEventListener('click', () => $('run').click());
+$('queue-stop').addEventListener('click', () => { state.cancelled = true; window.api.cancelJob(); });
+
+// ---------- options ----------
 
 remember('opt-pos', 'overlayPosition');
+remember('opt-theme', 'overlayTheme');
 
 // Remember a select's choice between sessions (a convenience only).
 function rememberSelect(id, key) {
@@ -300,7 +445,7 @@ applyTheme();
 
 // The upscaler only applies when the output is taller than the recording.
 function syncUpscaler() {
-  const h = Number($('opt-res').value) || 0, src = state.queue[0] ? state.queue[0].info.height : 0;
+  const h = Number($('opt-res').value) || 0, src = state.current ? state.current.info.height : 0;
   $('row-upscaler').hidden = !h || (src > 0 && h <= src);
 }
 $('opt-res').addEventListener('change', syncUpscaler);
@@ -343,21 +488,45 @@ function syncStyle() {
   const st = radioValue('opt-style');
   $('row-pos').hidden = st === 'strip' || st === 'none';
   $('row-title').hidden = $('row-pills').hidden = st === 'none';
+  syncGhosts();
 }
 for (const r of document.querySelectorAll('input[name="opt-style"]')) r.addEventListener('change', syncStyle);
 syncStyle();
 
-// The pill chips show what they would draw.
+const THEME_NAME = { mono: 'Mono', aurora: 'Aurora', vice: 'Vice', classic: 'Classic' };
+const STYLE_NAME = { panel: 'Panel', strip: 'Strip', glass: 'Glass', none: 'No overlay' };
+const RES_NAME = { source: 'source size', 1080: '1080p', 1440: '1440p', 2160: '4K' };
+
+// The pill chips show what they would draw; the section headers sum up their settings.
 function syncSummaries() {
-  const q = state.queue[0];
+  const q = state.current;
   document.querySelector('label[for="opt-target-pill"]').textContent = `TARGET ${$('opt-target').value || 'auto'}`;
-  document.querySelector('label[for="opt-format-pill"]').textContent = q ? `${q.info.height}P${Math.round(q.info.hz)}` : 'format';
+  document.querySelector('label[for="opt-format-pill"]').textContent = q ? fmtFormat(q.info).toUpperCase() : 'FORMAT';
+  const a = $('opt-start').value.trim(), b = $('opt-end').value.trim();
+  $('sum-measure').textContent = `${a || b ? `${a || '0:00'}–${b || 'end'}` : 'whole'} · target ${$('opt-target').value || 'auto'} · threshold ${$('opt-threshold').value || 'auto'}`;
+  const st = radioValue('opt-style');
+  $('sum-overlay').textContent = [THEME_NAME[radioValue('opt-theme')], STYLE_NAME[st], st === 'panel' || st === 'glass' ? radioValue('opt-pos') : null].filter(Boolean).join(' · ');
+  $('sum-export').textContent = `${radioValue('opt-enc') === 'gpu' ? 'NVENC' : 'x264'} · ${RES_NAME[$('opt-res').value]} · ${$('opt-quality').value}`;
+  syncGhosts();
+  syncCaption();
 }
-$('side').addEventListener('input', syncSummaries);
-$('side').addEventListener('change', syncSummaries);
+$('inspector').addEventListener('input', syncSummaries);
+$('inspector').addEventListener('change', syncSummaries);
 syncSummaries();
 
-// ⋯ menus close on a choice or a click elsewhere.
+// Typed In and Out points move the timeline handles too.
+for (const id of ['opt-start', 'opt-end']) {
+  $(id).addEventListener('change', () => {
+    const a = parseTime($('opt-start').value), b = parseTime($('opt-end').value);
+    const dur = state.current ? state.current.info.duration : 0;
+    state.range = Number.isFinite(a) || Number.isFinite(b) ? [Number.isFinite(a) ? a : 0, Number.isFinite(b) ? b : dur] : null;
+    drawChart();
+    updateRangeReadout();
+    updateRunButton();
+  });
+}
+
+// ⋯ menus and the Settings popover close on a choice or a click elsewhere.
 document.addEventListener('click', (e) => {
   for (const m of document.querySelectorAll('details.menu[open]')) {
     if (!m.contains(e.target) || e.target.closest('.menu-list button')) m.open = false;
@@ -365,43 +534,19 @@ document.addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.key === 'Enter' && !$('run').disabled) $('run').click();
+  if (!viewIs('view-work') || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName) || !state.result) return;
   const step = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
-  if (step && !$('scrub-row').hidden && !$('view-results').hidden && !/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) {
-    e.preventDefault();
-    const before = $('scrub').value;
-    $('scrub').value = Number(before) + step; // the input clamps it to its range
-    if ($('scrub').value !== before) $('scrub').dispatchEvent(new Event('change'));
-  }
+  if (step) { e.preventDefault(); stepScrub(step); }
+  else if (e.key === '[') $('set-in').click();
+  else if (e.key === ']') $('set-out').click();
+  else if (e.key === 'h') $('next-hitch').click();
+  else if (e.key === 'H') $('prev-hitch').click();
 });
-
-// The last two recordings, as shortcuts on the empty screen.
-function loadRecent() {
-  try { return JSON.parse(localStorage.getItem('recent') || '[]') || []; } catch (_) { return []; }
-}
-function rememberRecent(p) {
-  try { localStorage.setItem('recent', JSON.stringify([p, ...loadRecent().filter((x) => x !== p)].slice(0, 2))); } catch (_) { /* ignore */ }
-}
-function renderRecent() {
-  const box = $('recent'), list = loadRecent();
-  box.replaceChildren();
-  box.hidden = !list.length || state.queue.length > 0;
-  if (box.hidden) return;
-  box.append('Recent:');
-  for (const p of list) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.textContent = fileName(p);
-    b.title = p;
-    b.addEventListener('click', () => addVideos([p]));
-    box.appendChild(b);
-  }
-}
-renderRecent();
 
 // The preview follows the overlay and export options while results are up (debounced).
 let previewTimer = 0, previewDirty = false;
 function schedulePreview() {
-  if ($('view-results').hidden || !state.result || state.result.video !== state.lastAnalysed) return;
+  if (!viewIs('view-work') || !state.result || state.result.video !== state.lastAnalysed) return;
   if (state.running) { previewDirty = true; return; } // drawn again once the current one is done
   clearTimeout(previewTimer);
   previewTimer = setTimeout(runPreview, 600);
@@ -452,7 +597,7 @@ function readOptions() {
 /** The settings that only affect the overlay video. */
 function renderOptions() {
   return {
-    title: state.queue.length > 1 ? null : $('opt-title').value.trim() || null,
+    title: todoItems().length > 1 ? null : $('opt-title').value.trim() || null,
     position: radioValue('opt-pos'),
     showTarget: $('opt-target-pill').checked,
     showFormat: $('opt-format-pill').checked,
@@ -460,6 +605,7 @@ function renderOptions() {
     captionPosition: $('opt-caption-pos').value,
     watermark: $('opt-watermark-on').checked ? $('opt-watermark').value.trim() : '',
     style: radioValue('opt-style'),
+    theme: radioValue('opt-theme'),
     longGraph: $('opt-long').checked,
     longGraphOpacity: Number($('opt-long-opacity').value) / 100,
     endCard: $('opt-end-card').checked,
@@ -478,12 +624,32 @@ function resetSteps(renderVideo, renderOnly = false) {
     li.className = '';
     li.hidden = renderOnly ? li.dataset.step !== 'render' : li.dataset.step === 'render' && !renderVideo;
     li.querySelector('.bar-fill').style.width = '0';
-    li.querySelector('.step-pct').textContent = '';
+    li.querySelector('.step-pct').textContent = '—';
   }
 }
 
 let phaseStart = 0;
 let currentStep = null;
+let chartApi = null; // setters the last drawChart() left behind: playhead, sweep
+
+/** The Workspace while a job runs on its recording: busy scorecard, step card over the viewer, sweeping timeline. */
+function renderBusy(item) {
+  const renderOnly = Boolean(item.result && state.running && item.renderOnly);
+  $('verdict').className = 'panel scorecard busy lv-ok';
+  $('verdict-ring').style.setProperty('--pct', '0%');
+  $('verdict-pct').textContent = '…';
+  $('verdict-title').textContent = renderOnly ? 'Rendering video' : 'Starting…';
+  $('verdict-sub').textContent = `${item.name} · ${fmtFormat(item.info)} · ${fmtDuration(item.info.duration)}`;
+  $('verdict-chips').replaceChildren();
+  $('run-card').hidden = false;
+  $('preview-empty').hidden = true;
+  $('ghosts').hidden = true;
+  $('now-pill').hidden = true;
+  $('viewer-hint').hidden = true;
+  $('range-hint').textContent = 'The per-second numbers arrive when measuring finishes; the marker shows how far the run has got.';
+  $('transport-hint').textContent = '';
+  drawChart();
+}
 
 function onProgress({ phase, fraction }) {
   if (phase === 'done') return;
@@ -506,57 +672,89 @@ function onProgress({ phase, fraction }) {
   }
   const li = document.querySelector(`.steps li[data-step="${step}"]`);
   const pct = li.querySelector('.step-pct');
+  const item = state.runningItem;
+  const card = item && libNodes.get(item.path);
+  let text;
   if (phase === 'analyse' || phase === 'overlay') {
     li.classList.add('indeterminate');
-    pct.textContent = phase === 'overlay' ? 'building overlay…' : '';
-    return;
+    text = phase === 'overlay' ? 'building overlay…' : '';
+    pct.textContent = text;
+  } else {
+    li.classList.remove('indeterminate');
+    li.querySelector('.bar-fill').style.width = `${(fraction * 100).toFixed(1)}%`;
+    const elapsed = (performance.now() - phaseStart) / 1000;
+    let eta = '';
+    if (fraction > 0.03 && elapsed > 2) eta = ` · ${fmtDuration(elapsed / fraction - elapsed)} left`;
+    text = `${Math.floor(fraction * 100)}%${eta}`;
+    pct.textContent = `${Math.floor(fraction * 100)}%`; // the time left is already in the verdict title and clips the 72 px step cell
+    $('prog-line-fill').style.width = `${fraction * 100}%`;
+    $('queue-fill').style.width = `${fraction * 100}%`;
+    if (card) card.fill.style.width = `${fraction * 100}%`;
   }
-  li.classList.remove('indeterminate');
-  li.querySelector('.bar-fill').style.width = `${(fraction * 100).toFixed(1)}%`;
-  const elapsed = (performance.now() - phaseStart) / 1000;
-  let eta = '';
-  if (fraction > 0.03 && elapsed > 2) eta = ` · ${fmtDuration(elapsed / fraction - elapsed)} left`;
-  pct.textContent = `${Math.floor(fraction * 100)}%${eta}`;
+  const line = `${STEP_NAME[step]}${text ? ` ${text}` : '…'}`;
+  if (item) {
+    $('queue-text').textContent = `${state.run.done} of ${state.run.done + state.queue.filter((q) => q.status === 'waiting').length + 1} done · ${item.name} · ${line}`;
+    if (card) { card.status.textContent = line; card.badge.textContent = ''; card.badge.append(node('span', 'dot dot-run'), line); }
+  }
+  if (item && item === state.current) {
+    $('verdict-title').textContent = line;
+    $('verdict-ring').style.setProperty('--pct', `${phase === 'measure' || phase === 'render' ? Math.round(fraction * 100) : 0}%`);
+    $('verdict-pct').textContent = phase === 'measure' || phase === 'render' ? `${Math.floor(fraction * 100)}%` : '…';
+    if (chartApi && chartApi.setSweep && phase === 'measure') chartApi.setSweep(fraction);
+  }
 }
 
 window.api.onProgress(onProgress);
 
 /** A note when the clip is long enough that the overlay file and the render get heavy. */
-function longClipNote(opts) {
-  const longest = Math.max(...state.queue.map((q) => (opts.end || q.info.duration) - (opts.start || 0)));
+function longClipNote(opts, items) {
+  const longest = Math.max(...items.map((q) => (opts.end || q.info.duration) - (opts.start || 0)));
   if (!opts.renderVideo || longest <= 1800) return null;
   return `This clip is ${Math.round(longest / 60)} minutes long. The overlay file will be about ${Math.round(longest * 0.2)} MB and rendering will take a while. ` +
     'Set a range, or turn off "Also render the video", to go faster.';
 }
 
+function startRun() {
+  state.running = true;
+  state.cancelled = false;
+  currentStep = null;
+  $('prog-line-fill').style.width = '0';
+  updateRunButton();
+}
+
 $('run').addEventListener('click', async () => {
+  if (state.running) return;
   await state.gpuReady; // the encoder default depends on the GPU check
   let opts;
   try {
     opts = readOptions();
   } catch (e) {
-    $('file-meta').textContent = e.message;
-    $('file-meta').className = 'file-meta err';
+    $('run-hint').textContent = e.message;
+    $('run-hint').classList.add('lv-bad');
     return;
   }
-  state.running = true;
-  state.cancelled = false;
-  updateRunButton();
-  $('cancel').hidden = false;
-  const note = longClipNote(opts);
+  if (state.current) state.current.status = 'waiting';
+  const planned = todoItems();
+  if (!planned.length) return;
+  startRun();
+  state.run.done = 0;
+  const note = longClipNote(opts, planned);
   $('long-note').textContent = note || '';
   $('long-note').hidden = !note;
-  for (const item of state.queue) { item.status = 'waiting'; item.result = null; item.error = null; item.note = null; }
-  // One after another; a cancel stops the current job and skips the rest.
-  for (let i = 0; i < state.queue.length; i++) {
-    const item = state.queue[i];
+  // One after another, picking up files added meanwhile; a cancel stops the current job and skips the rest.
+  let item;
+  while ((item = state.queue.find((q) => q.status === 'waiting'))) {
     if (state.cancelled) { item.status = 'cancelled'; continue; }
     item.status = 'measuring';
-    renderQueue();
-    $('prog-name').textContent = item.name + (state.queue.length > 1 ? ` (${i + 1} of ${state.queue.length})` : '');
+    item.result = null;
+    item.error = null;
+    item.note = null;
+    item.renderOnly = false;
+    state.runningItem = item;
     currentStep = null;
     resetSteps(opts.renderVideo);
-    show('view-progress');
+    renderLibrary();
+    if (!viewIs('view-compare')) openItem(item); // the Workspace follows the job, as the run card lives there
     // A range picked on one clip's chart cannot apply to a clip that ends before it.
     const itemOpts = { ...opts, video: item.path, outDir: itemOutDir(item) };
     if (opts.start !== null && opts.start >= item.info.duration) {
@@ -569,52 +767,52 @@ $('run').addEventListener('click', async () => {
     item.result = r.ok ? r.result : null;
     item.opts = itemOpts;
     item.error = r.error || null;
-    if (r.ok) state.lastAnalysed = r.result.video; // the resolved path, as results carry it
+    if (r.ok) { state.lastAnalysed = r.result.video; upsertLibrary(item); } // the resolved path, as results carry it
     if (r.cancelled || (r.result && r.result.renderCancelled)) state.cancelled = true; // Cancel stops the whole queue
+    state.run.done += 1;
+    if (state.current === item) {
+      if (r.ok) openItem(item);
+      else if (!r.cancelled) showError(planned.length > 1 ? `${item.name}: the analysis stopped` : 'The analysis stopped', r.error);
+      else openItem(item);
+    } else if (!r.ok && !r.cancelled) addWarning(`${item.name} failed: ${item.error}`);
   }
-  renderQueue();
   state.running = false;
-  $('cancel').hidden = true;
-  const done = state.queue.filter((q) => q.status === 'done');
-  const failed = state.queue.find((q) => q.status === 'error');
-  if (done.length) {
-    selectResult(done[done.length - 1]);
-    if (failed) addWarning(`${failed.name} failed: ${failed.error}`);
-    show('view-results');
-  } else if (failed) {
-    showError(state.queue.length > 1 ? `${failed.name}: the analysis stopped` : 'The analysis stopped', failed.error);
-  } else {
-    show(state.result ? 'view-results' : 'view-empty');
-  }
+  state.runningItem = null;
+  renderLibrary();
   updateRunButton();
+  if (state.current && viewIs('view-work')) openItem(state.current); // clears the busy state when the last job was a different item
 });
 
 $('render-again').addEventListener('click', async () => {
   if (!state.result || state.running) return;
   await state.gpuReady;
   const opts = renderOptions();
-  state.running = true;
-  updateRunButton();
-  $('cancel').hidden = false;
-  $('prog-name').textContent = fileName(state.result.video);
-  currentStep = null;
+  const item = state.current;
+  item.renderOnly = true;
+  state.runningItem = item;
+  startRun();
   resetSteps(true, true);
-  show('view-progress');
+  renderBusy(item);
   const r = await window.api.renderOnly(opts);
+  item.renderOnly = false;
   finishJob(r, state.opts, 'Rendering stopped');
 });
 
 $('preview').addEventListener('click', () => runPreview());
 
-/** One frame at state.previewAt with the overlay options on the left, shown under the warnings. */
+/** One frame at state.previewAt with the overlay options from the inspector, in the viewer. */
 async function runPreview() {
-  if (!state.result) return;
+  if (!state.result || state.result.video !== state.lastAnalysed) return; // the main process only holds the last analysis
   if (state.running) { previewDirty = true; return; } // drawn again at the new moment once this one is done
   await state.gpuReady;
   const at = state.previewAt;
   const opts = renderOptions();
   state.running = true;
   updateRunButton();
+  $('run').hidden = false; // a preview is not a job the user cancels
+  $('cancel').hidden = true;
+  $('run-banner').hidden = true;
+  $('prog-line').hidden = true;
   const b = $('preview');
   b.textContent = 'Drawing preview…';
   const r = await window.api.preview(opts, state.previewAt);
@@ -629,23 +827,23 @@ async function runPreview() {
   $('preview-img').src = `data:image/jpeg;base64,${r.jpeg}`;
   $('preview-img').hidden = false;
   $('preview-empty').hidden = true;
+  syncCaption();
   if (state.previewAt === at) { state.previewAt = r.at; syncScrub(); } // unless the user moved on meanwhile
-  $('preview-cap').textContent = `At ${fmtStamp((state.opts.start || 0) + r.at)} with the options on the left. Drag the slider, press ← →, or click the chart to move the moment; press Render video to apply the options.`;
 }
 
 function finishJob(r, opts, errorTitle) {
   state.running = false;
-  $('cancel').hidden = true;
+  state.runningItem = null;
   updateRunButton();
   if (r.ok) {
     const item = state.queue.find((q) => q.result && q.result.video === r.result.video);
-    if (item) item.result = r.result;
+    if (item) { item.result = r.result; upsertLibrary(item); }
     state.result = r.result;
     state.opts = opts;
     renderResults(r.result, opts);
-    show('view-results');
+    show('view-work');
   } else if (r.cancelled) {
-    show(state.result ? 'view-results' : 'view-empty');
+    openItem(state.current);
   } else {
     showError(errorTitle, r.error);
   }
@@ -676,38 +874,15 @@ $('error-copy').addEventListener('click', async () => {
   } catch (_) { /* the text is still on screen to select */ }
 });
 
-/** Show one queued item's results; the switch row lists every finished one. */
-function selectResult(item) {
-  state.result = item.result;
-  state.opts = item.opts;
-  renderResults(item.result, item.opts);
-  const nav = $('res-switch');
-  nav.replaceChildren();
-  const done = state.queue.filter((q) => q.status === 'done');
-  nav.hidden = done.length < 2;
-  for (const q of done) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'btn-small';
-    b.textContent = q.name;
-    b.setAttribute('aria-pressed', String(q === item));
-    b.addEventListener('click', () => { if (!state.running) selectResult(q); });
-    nav.appendChild(b);
-  }
-  updateRunButton();
-}
-
 function addWarning(text) {
-  const d = document.createElement('div');
-  d.className = 'warn';
-  d.textContent = text;
+  const d = node('div', 'warn', text);
   $('warnings').appendChild(d);
 }
 
 $('cancel').addEventListener('click', () => window.api.cancelJob());
-$('error-back').addEventListener('click', () => show(state.result ? 'view-results' : 'view-empty'));
+$('error-back').addEventListener('click', () => { if (state.current) openItem(state.current); else show('view-library'); });
 
-// ---------- results ----------
+// ---------- workspace ----------
 
 /** A capture that is not 60 or 120 Hz; the console's refresh is what the game is measured against. */
 const oddHz = (hz) => Math.abs(hz - 60) > 1 && Math.abs(hz - 120) > 1;
@@ -725,34 +900,101 @@ function setLevel(node, fps, target) {
   node.className = `lv-${level(fps, target)}`;
 }
 
-function renderResults(r, opts) {
+function chip(text) { return node('span', 'chipm', text); }
+
+/** Show one queue item in the Workspace: its results, its pending state, or the running job. */
+function openItem(item) {
+  state.current = item;
+  state.result = item.result;
+  state.opts = item.opts || null;
+  $('res-name').textContent = item.name;
+  $('res-name').title = item.path;
+  setTargets(item.targets);
+  $('opt-title').placeholder = item.stem;
+  syncUpscaler();
+  $('warnings').replaceChildren();
+  if (item.note) addWarning(item.note);
+  if (item.status === 'error' && item.error) addWarning(`The last run failed: ${item.error}`);
+  const e = libEntry(item.path);
+  if (item.result) renderResults(item.result, item.opts || {}, e);
+  else renderPending(item);
+  if (item === state.runningItem) renderBusy(item);
+  show('view-work');
+  updateRunButton();
+}
+
+/** A recording that has not been measured yet: the file's facts, placeholders for the numbers. */
+function renderPending(item) {
+  const i = item.info;
+  $('res-chips').replaceChildren(chip(fmtFormat(i)), chip(fmtDuration(i.duration)), chip(`target ${$('opt-target').value || 'auto'}`));
+  $('res-meta').textContent = oddHz(i.hz)
+    ? `Recorded at ${i.hz.toFixed(2)} fps; record at the console's refresh rate (60 or 120) for best results`
+    : 'Not analysed yet';
+  $('verdict').className = 'panel scorecard';
+  $('verdict-ring').style.setProperty('--pct', '0%');
+  $('verdict-pct').textContent = '–';
+  $('verdict-title').textContent = 'Not analysed yet';
+  $('verdict-sub').textContent = 'Press Analyse to measure every frame. Set In and Out first to measure only a part.';
+  $('verdict-chips').replaceChildren();
+  for (const id of ['t-avg', 't-low1', 't-low01', 't-longest', 't-pacing', 't-missed']) { $(id).textContent = '–'; $(id).className = ''; }
+  for (const id of ['t-avg-sub', 't-missed-sub', 't-longest-sub', 't-pacing-sub']) $(id).textContent = '';
+  $('t-pacing-unit').textContent = '% even';
+  $('t-missed-row').hidden = true;
+  $('preview-img').hidden = true;
+  $('preview-img').removeAttribute('src');
+  $('preview-empty').hidden = false;
+  $('preview-empty').textContent = 'Press Analyse to measure this recording';
+  $('run-card').hidden = true;
+  $('ghosts').hidden = true;
+  $('now-pill').hidden = true;
+  $('viewer-hint').hidden = true;
+  $('viewer-cap').hidden = true;
+  $('scrub').max = Math.max(0, Math.ceil(i.duration) - 1);
+  state.previewAt = 0;
+  syncScrub();
+  updateRangeReadout();
+  $('range-hint').textContent = 'The FPS of every second appears here after the analysis.';
+  $('transport-hint').textContent = '';
+  $('markers').replaceChildren();
+  $('sec-details').hidden = true;
+  $('open-video').hidden = true;
+  $('render-again').hidden = true;
+  drawChart();
+  fitFrame();
+}
+
+function renderResults(r, opts, entry) {
   const s = r.summary;
   const c = s.capture;
   const t = s.target_fps;
-  $('res-name').textContent = fileName(r.video);
   state.previewAt = c.seconds / 2;
   previewDirty = false; // a fresh preview is scheduled below anyway
   // The main process only holds the last analysis, so only that one can be previewed.
   const current = r.video === state.lastAnalysed;
   $('preview-img').hidden = true;
+  $('preview-img').removeAttribute('src');
   $('preview-empty').hidden = false;
-  $('preview-empty').textContent = current ? 'Drawing the preview…' : 'Analyse this recording again to preview the overlay.';
+  $('preview-empty').textContent = current ? 'Drawing the preview…' : 'Analyse again to preview or render';
   if (current) setTimeout(schedulePreview, 0); // after the view is shown
-  $('scrub-row').hidden = !current;
+  $('run-card').hidden = true;
+  $('ghosts').hidden = !current;
+  $('viewer-hint').hidden = !current;
+  $('now-pill').hidden = false;
   $('scrub').max = Math.max(0, Math.ceil(c.seconds) - 1);
   syncScrub();
   renderVerdict(s, opts);
   const nH = s.hitches.count, nS = s.static_holds.count, nL = s.loading.count;
   $('t-longest-sub').textContent = [nH && `${nH} hitch${nH === 1 ? '' : 'es'}`, nS && `${nS} still`, nL && `${nL} loading`].filter(Boolean).join(' · ') || 'No hitches';
+  $('transport-hint').textContent = `${$('t-longest-sub').textContent} · ← → step · [ ] set In/Out · H next hitch`;
   $('sum-details').textContent = `${s.holds.length}${s.holds.length >= 40 ? '+' : ''} hold${s.holds.length === 1 ? '' : 's'} · threshold ${s.threshold} ${s.threshold_source}`;
   $('t-pacing').textContent = s.pacing.even_pct === null ? '–' : s.pacing.even_pct.toFixed(0);
   $('t-pacing-unit').textContent = s.pacing.even_pct === null ? 'unlocked' : '% even';
+  $('t-pacing').className = '';
   if (s.pacing.even_pct !== null) setLevel($('t-pacing'), s.pacing.even_pct, 100);
   $('t-pacing-sub').textContent = `stutter time ${s.stutter_time_pct}%` + (s.tears.count ? ` · ${s.tears.count} tears` : '');
-  const span = opts.start || opts.end
-    ? ` · ${fmtStamp(opts.start || 0)}–${opts.end ? fmtStamp(opts.end) : 'end'}`
-    : '';
-  $('res-meta').textContent = `${c.width}×${c.height} · ${c.refresh_hz} Hz · ${fmtDuration(c.seconds)} analysed${span} · target ${t} fps`;
+  const span = opts.start || opts.end ? `${fmtDuration(opts.start || 0)}–${opts.end ? fmtDuration(opts.end) : 'end'}` : 'whole recording';
+  $('res-chips').replaceChildren(chip(`${c.height}p${Math.round(c.refresh_hz)}`), chip(fmtDuration(c.seconds)), chip(`target ${t}`));
+  $('res-meta').textContent = `Analysed ${span}` + (entry && entry.analysedAt ? ` · ${fmtAgo(entry.analysedAt)}` : '');
 
   $('t-avg').textContent = s.avg_fps.toFixed(1);
   setLevel($('t-avg'), s.avg_fps, t);
@@ -761,11 +1003,12 @@ function renderResults(r, opts) {
   setLevel($('t-low1'), s.low_1pct_fps, t);
   $('t-low01').textContent = s.low_0_1pct_fps.toFixed(1);
   setLevel($('t-low01'), s.low_0_1pct_fps, t);
+  $('t-missed-row').hidden = false;
   $('t-missed').textContent = s.frames_missing_target.toLocaleString();
   $('t-missed-sub').textContent = `${s.frames_missing_target_pct}%`;
   $('t-longest').textContent = s.longest_frame_ms.toFixed(1);
+  $('t-longest').className = '';
 
-  $('warnings').replaceChildren();
   if (c.dropped_by_recorder) {
     addWarning(`The recording itself is missing ${c.dropped_by_recorder} refresh${c.dropped_by_recorder === 1 ? '' : 'es'} (OBS dropped frames). Results near those points are not reliable.`);
   }
@@ -774,29 +1017,19 @@ function renderResults(r, opts) {
     addWarning(`Recorded at ${c.refresh_hz} fps. Match OBS to the console's refresh rate (60, or 120 for a 40 fps mode) so every refresh is captured.`);
   }
   if (!$('long-note').hidden) addWarning($('long-note').textContent);
-  const item = state.queue.find((q) => q.result === r);
-  if (item && item.note) addWarning(item.note);
 
   const stalls = $('stalls');
   stalls.replaceChildren();
   const list = s.holds;
-  if (!list.length) {
-    const li = document.createElement('li');
-    li.className = 'empty';
-    li.textContent = 'None. No frame stayed on screen for 2.5 target frames or more.';
-    stalls.appendChild(li);
-  }
+  if (!list.length) stalls.appendChild(node('li', 'empty', 'None. No frame stayed on screen for 2.5 target frames or more.'));
   for (const [at, ms, kind] of list) {
     const li = document.createElement('li');
-    const a = document.createElement('span');
-    a.textContent = fmtStamp((opts.start || 0) + at);
-    const k = document.createElement('span');
-    k.className = 'kind';
-    k.textContent = kind === 'static' ? 'still' : kind;
-    const b = document.createElement('span');
-    b.textContent = `${ms.toFixed(1)} ms`;
-    b.className = kind !== 'hitch' ? 'lv-ok' : ms >= 500 ? 'lv-bad' : 'lv-warn';
-    li.append(a, k, b);
+    const a = node('button', '', fmtStamp((opts.start || 0) + at));
+    a.type = 'button';
+    a.title = 'Preview this moment';
+    a.addEventListener('click', () => seekTo(at));
+    const b = node('span', kind !== 'hitch' ? '' : ms >= 500 ? 'lv-bad' : 'lv-warn', `${ms.toFixed(1)} ms`);
+    li.append(a, node('span', 'kind', kind === 'static' ? 'still' : kind), b);
     stalls.appendChild(li);
   }
 
@@ -815,24 +1048,24 @@ function renderResults(r, opts) {
     ['Threshold', `${s.threshold} (${s.threshold_source})`],
     ['Diff p5 / p50 / p95', `${p.p5} / ${p.p50} / ${p.p95}`],
     ['Dropped by recorder', String(c.dropped_by_recorder)],
-    ['Measured in', `${fmtDuration(r.measureSeconds)} (${r.hwDecode ? 'GPU' : 'CPU'} decoding)`],
-    ['Rendered in', r.overlayVideo ? `${fmtDuration(r.renderSeconds)} (${r.encoder === 'gpu' ? 'NVENC' : 'x264'}, ${r.outputWidth}×${r.outputHeight})` : 'Not rendered'],
+    ['Measured in', r.measureSeconds == null ? 'An earlier session' : `${fmtDuration(r.measureSeconds)} (${r.hwDecode ? 'GPU' : 'CPU'} decoding)`],
+    ['Rendered in', !r.overlayVideo ? 'Not rendered' : r.renderSeconds == null ? 'An earlier session' : `${fmtDuration(r.renderSeconds)} (${r.encoder === 'gpu' ? 'NVENC' : 'x264'}, ${r.outputWidth}×${r.outputHeight})`],
     ['Output', r.outDir],
   ];
-  for (const [k, v] of rows) {
-    const dt = document.createElement('dt');
-    dt.textContent = k;
-    const dd = document.createElement('dd');
-    dd.textContent = v;
-    dl.append(dt, dd);
-  }
+  for (const [k, v] of rows) dl.append(node('dt', '', k), node('dd', '', v));
+  $('sec-details').hidden = false;
 
   $('open-video').hidden = !r.overlayVideo;
   // One primary action: Play once a video exists, else Render.
+  $('render-again').hidden = false;
   $('render-again').textContent = r.overlayVideo ? 'Render again' : 'Render video';
   $('render-again').classList.toggle('btn-primary', !r.overlayVideo);
-  $('render-again').classList.toggle('btn-small', Boolean(r.overlayVideo));
+  updateRangeReadout();
+  $('range-hint').textContent = state.range
+    ? `In and Out set to ${fmtStamp(state.range[0])}–${fmtStamp(state.range[1])}. Press Analyse to measure only that part. Double-click the chart to clear.`
+    : 'Click a second to preview the overlay there. Drag to set the range, then press Analyse to measure only that part. Double-click to clear.';
   drawChart();
+  fitFrame();
 }
 
 /** One sentence above the numbers: how many frames hit the target, and the worst moments as chips that seek the preview. */
@@ -841,42 +1074,74 @@ function renderVerdict(s, opts) {
   const held = Math.max(0, Math.min(100, Math.round(100 - s.frames_missing_target_pct)));
   const lv = held >= 95 ? 'ok' : held >= 80 ? 'warn' : 'bad';
   const worst = s.hitches.first.slice().sort((a, b) => b[1] - a[1]);
-  const box = $('verdict');
-  box.className = `verdict lv-${lv}`;
+  $('verdict').className = `panel scorecard lv-${lv}`;
   $('verdict-ring').style.setProperty('--pct', `${held}%`);
   $('verdict-pct').textContent = `${held}%`;
   const capped = s.hitches.count > worst.length; // the list holds the first 20 only
-  $('verdict-title').textContent = `${held}% of frames hit ${t} fps.` + (worst.length
-    ? ` ${s.hitches.count} hitch${s.hitches.count === 1 ? '' : 'es'}, the ${capped ? 'worst listed' : 'worst'} at ${fmtDuration(off + worst[0][0])}.`
-    : ' No hitches.');
-  $('verdict-sub').textContent = `Average ${s.avg_fps.toFixed(1)} fps · 1% low ${s.low_1pct_fps.toFixed(1)} fps · ` +
-    (s.pacing.even_pct === null ? '' : `pacing ${s.pacing.even_pct.toFixed(0)}% even · `) +
-    `${s.frames_missing_target.toLocaleString()} of ${s.game_frames.toLocaleString()} frames missed the target in ${fmtDuration(s.seconds)} of play`;
+  $('verdict-title').textContent = `${held}% of frames hit ${t} fps` + (worst.length
+    ? ` · ${s.hitches.count} hitch${s.hitches.count === 1 ? '' : 'es'}, the ${capped ? 'worst listed' : 'worst'} at ${fmtDuration(off + worst[0][0])}`
+    : ' · no hitches');
+  $('verdict-sub').textContent = `${s.frames_missing_target.toLocaleString()} of ${s.game_frames.toLocaleString()} frames missed the target in ${fmtDuration(s.seconds)} of play`;
   const chips = $('verdict-chips');
   chips.replaceChildren();
   for (const [at, ms] of worst.slice(0, 3)) {
-    const b = document.createElement('button');
+    const b = node('button', ms >= 500 ? 'lv-bad' : 'lv-warn', `${fmtDuration(off + at)} · ${ms.toFixed(0)} ms`);
     b.type = 'button';
-    b.className = ms >= 500 ? 'lv-bad' : 'lv-warn';
-    b.textContent = `${fmtDuration(off + at)} · ${ms.toFixed(0)} ms`;
     b.title = 'Preview this moment';
-    b.addEventListener('click', () => { state.previewAt = at; runPreview(); });
+    b.addEventListener('click', () => seekTo(at));
     chips.appendChild(b);
   }
 }
 
-/** The slider and its label follow state.previewAt. */
+/** Move the playhead to a moment of the analysed span and preview it. */
+function seekTo(at) {
+  state.previewAt = at;
+  syncScrub();
+  runPreview();
+}
+
+/** The slider, its label, the playhead and the now-playing pill follow state.previewAt. */
 function syncScrub() {
+  const off = (state.opts && state.opts.start) || 0;
   $('scrub').value = Math.floor(state.previewAt);
-  $('scrub-val').textContent = fmtDuration(((state.opts && state.opts.start) || 0) + state.previewAt);
+  $('scrub-val').textContent = fmtDuration(off + state.previewAt);
+  if (chartApi && chartApi.setPlayhead) chartApi.setPlayhead(state.previewAt);
+  const r = state.result;
+  const pill = $('now-pill');
+  pill.replaceChildren();
+  if (!r) return;
+  const sec = Math.floor(state.previewAt);
+  const row = r.perSecond[sec];
+  pill.append(fmtDuration(off + state.previewAt));
+  if (row) {
+    const b = node('b', `lv-${level(row[1], r.summary.target_fps)}`, `${row[1]} fps`);
+    pill.appendChild(b);
+  }
+  const hold = r.summary.holds.find(([at, ms]) => state.previewAt >= at - 0.5 && state.previewAt <= at + ms / 1000 + 0.5);
+  if (hold) pill.appendChild(node('span', '', `longest frame ${hold[1].toFixed(0)} ms · ${hold[2] === 'static' ? 'still' : hold[2]}`));
 }
 $('scrub').addEventListener('input', () => {
   $('scrub-val').textContent = fmtDuration(((state.opts && state.opts.start) || 0) + Number($('scrub').value));
 });
-$('scrub').addEventListener('change', () => {
-  state.previewAt = Number($('scrub').value) + 0.5;
-  runPreview();
-});
+$('scrub').addEventListener('change', () => seekTo(Number($('scrub').value) + 0.5));
+
+function stepScrub(d) {
+  const before = $('scrub').value;
+  $('scrub').value = Number(before) + d; // the input clamps it to its range
+  if ($('scrub').value !== before) $('scrub').dispatchEvent(new Event('change'));
+}
+$('step-back').addEventListener('click', () => stepScrub(-1));
+$('step-fwd').addEventListener('click', () => stepScrub(1));
+
+/** The hitch before or after the playhead, if any. */
+function jumpHitch(dir) {
+  if (!state.result) return;
+  const hitches = state.result.summary.holds.filter((h) => h[2] === 'hitch').map((h) => h[0]).sort((a, b) => a - b);
+  const at = dir > 0 ? hitches.find((x) => x > state.previewAt + 0.05) : hitches.filter((x) => x < state.previewAt - 0.05).pop();
+  if (at !== undefined) seekTo(at);
+}
+$('prev-hitch').addEventListener('click', () => jumpHitch(-1));
+$('next-hitch').addEventListener('click', () => jumpHitch(1));
 
 $('open-video').addEventListener('click', () => {
   if (state.result && state.result.overlayVideo) window.api.openPath(state.result.overlayVideo);
@@ -886,16 +1151,90 @@ $('open-folder').addEventListener('click', () => {
   window.api.showInFolder(state.result.overlayVideo || `${state.result.outDir}\\summary.json`);
 });
 
+// The ghost slots over the preview move the overlay; the active one is outlined.
+function syncGhosts() {
+  const pos = radioValue('opt-pos'), st = radioValue('opt-style');
+  for (const g of document.querySelectorAll('.ghost')) g.classList.toggle('on', g.dataset.pos === pos);
+  if (state.result && state.result.video === state.lastAnalysed && !state.running) $('ghosts').hidden = st === 'strip' || st === 'none';
+}
+for (const g of document.querySelectorAll('.ghost')) {
+  g.addEventListener('click', () => {
+    const r = $(`pos-${g.dataset.pos}`);
+    r.checked = true;
+    r.dispatchEvent(new Event('change'));
+    syncGhosts();
+    schedulePreview();
+  });
+}
+
+// The caption is drawn at its corner while no preview frame is up (the frame itself shows the real one).
+function syncCaption() {
+  const cap = $('viewer-cap');
+  const text = $('opt-caption').value.trim();
+  cap.hidden = !text || !state.result || !$('preview-img').hidden;
+  cap.textContent = text;
+  cap.dataset.pos = $('opt-caption-pos').value;
+}
+
+/** Keep the frame at the picture's aspect ratio inside the viewer so the ghost slots land on the picture. */
+function fitFrame() {
+  const stage = $('viewer-stage'), frame = $('frame'), img = $('preview-img');
+  const sw = stage.clientWidth, sh = stage.clientHeight;
+  if (!sw || !sh) return;
+  const info = state.current && state.current.info;
+  const ratio = img.naturalWidth && !img.hidden ? img.naturalWidth / img.naturalHeight : info ? info.width / info.height : 16 / 9;
+  const w = Math.min(sw, sh * ratio);
+  frame.style.width = `${w}px`;
+  frame.style.height = `${w / ratio}px`;
+}
+new ResizeObserver(() => { if (viewIs('view-work')) fitFrame(); }).observe($('viewer-stage'));
+$('preview-img').addEventListener('load', () => { fitFrame(); storeThumb(); });
+
+/** A 320 px JPEG of the preview for the library card. */
+function storeThumb() {
+  const img = $('preview-img'), e = state.current && libEntry(state.current.path);
+  if (!e || !img.naturalWidth) return;
+  try {
+    const cv = document.createElement('canvas');
+    cv.width = 320;
+    cv.height = Math.round(320 * img.naturalHeight / img.naturalWidth);
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    e.thumb = cv.toDataURL('image/jpeg', 0.7);
+    saveLibrary();
+  } catch (_) { /* no thumbnail, the card keeps its numbers */ }
+}
+
+// ---------- timeline ----------
+
+function updateRangeReadout() {
+  const item = state.current;
+  if (!item) return;
+  const dur = state.result ? state.result.summary.capture.seconds : item.info.duration;
+  const off = (state.opts && state.opts.start) || 0;
+  $('range-readout').textContent = state.range
+    ? `In ${fmtDuration(state.range[0])} · Out ${fmtDuration(state.range[1])} · ${fmtDuration(state.range[1] - state.range[0])} selected`
+    : `${off ? `From ${fmtDuration(off)}` : 'Whole recording'} · ${fmtDuration(dur)}`;
+}
+
+const BAR_COLORS = { ok: '#4F9CF9', warn: '#F5B544', bad: '#F2555C' };
+
 function drawChart() {
   const host = $('chart');
   host.replaceChildren();
-  if (!state.result) return;
-  const data = state.result.perSecond;
-  const target = state.result.summary.target_fps;
+  $('markers').replaceChildren();
+  $('chart-tip').hidden = true;
+  chartApi = null;
+  const item = state.current;
+  if (!item) return;
+  const r = item.result;
+  const busy = item === state.runningItem && !item.renderOnly;
+  const data = r && !busy ? r.perSecond : [];
+  const target = r ? r.summary.target_fps : Number($('opt-target').value) || 60;
   const W = host.clientWidth, H = host.clientHeight;
-  if (!W || !data.length) return;
+  if (!W) return;
   const L = 34, R = 8, T = 10, B = 24;
   const pw = W - L - R, ph = H - T - B;
+  const n = data.length || Math.max(1, Math.floor(item.info.duration));
   const maxY = Math.max(target * 1.25, ...data.map((d) => d[1]));
   const y = (v) => T + ph - (v / maxY) * ph;
   const svg = el('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Frames per second for each second of the recording, target ${target}` });
@@ -905,20 +1244,16 @@ function drawChart() {
     svg.appendChild(el('text', { class: 'axis', x: L - 6, y: y(v) + 4, 'text-anchor': 'end' }, String(Math.round(v))));
   }
 
-  const n = data.length;
   const slot = pw / n;
   const gap = slot > 4 ? 1 : 0;
-  const colors = { ok: '#5AA9E6', warn: '#F5B13D', bad: '#F2545B' };
-  const offset = (state.opts && state.opts.start) || 0;
+  const offset = (data.length && state.opts && state.opts.start) || 0;
   for (const [sec, fps] of data) {
     const h = Math.max(1.5, (fps / maxY) * ph);
-    const rect = el('rect', {
+    svg.appendChild(el('rect', {
       x: (L + sec * slot).toFixed(2), y: (T + ph - h).toFixed(2),
       width: Math.max(0.6, slot - gap).toFixed(2), height: h.toFixed(2),
-      fill: colors[level(fps, target)],
-    });
-    rect.appendChild(el('title', {}, `${fmtDuration(offset + sec)}  ${fps} fps`));
-    svg.appendChild(rect);
+      fill: BAR_COLORS[level(fps, target)],
+    }));
   }
   svg.appendChild(el('line', { class: 'target', x1: L, x2: W - R, y1: y(target), y2: y(target) }));
 
@@ -931,41 +1266,96 @@ function drawChart() {
     svg.appendChild(el('text', { class: 'axis', x, y: H - 6, 'text-anchor': anchor }, fmtDuration(offset + sec)));
   }
 
-  // Click a second to preview there; drag to set Start and End; double-click to clear.
-  const sel = el('rect', { class: 'sel', x: L, y: T, width: 0, height: ph, visibility: 'hidden' });
-  const hit = el('rect', { class: 'hit', x: L, y: T, width: pw, height: ph });
-  svg.append(sel, hit);
-  const secAt = (e) => Math.min(n, Math.max(0, Math.round((e.clientX - svg.getBoundingClientRect().left - L) / slot)));
+  if (!data.length) {
+    // No per-second numbers yet: an empty axis, and a sweep that follows the measuring progress.
+    svg.appendChild(el('text', { class: 'empty', x: L + pw / 2, y: T + ph / 2, 'text-anchor': 'middle' },
+      busy ? 'Measuring… the per-second numbers arrive when it finishes' : 'No analysis yet'));
+    if (busy) {
+      const line = el('line', { class: 'sweep', x1: L, x2: L, y1: T - 4, y2: T + ph });
+      const bg = el('rect', { class: 'sweep-bg', x: L + 6, y: T - 8, width: 40, height: 14, rx: 3 });
+      const tag = el('text', { class: 'sweep-tag', x: L + 26, y: T + 3, 'text-anchor': 'middle' }, '0:00');
+      svg.append(line, bg, tag);
+      chartApi = { setSweep(f) {
+        const x = L + f * pw;
+        line.setAttribute('x1', x); line.setAttribute('x2', x);
+        bg.setAttribute('x', Math.min(x + 6, W - R - 40)); tag.setAttribute('x', Math.min(x + 26, W - R - 20));
+        tag.textContent = fmtDuration(f * item.info.duration);
+      } };
+    }
+    host.appendChild(svg);
+    return;
+  }
+
+  // Hold markers above the chart, one tick per hold, coloured by kind.
+  for (const [at, ms, kind] of r.summary.holds) {
+    const i = document.createElement('i');
+    i.className = kind === 'hitch' ? `hitch${ms >= 500 ? ' bad' : ''}` : '';
+    i.style.left = `${(L + at * slot).toFixed(1)}px`;
+    i.title = `${fmtStamp(offset + at)} · ${ms.toFixed(0)} ms · ${kind === 'static' ? 'still' : kind}`;
+    $('markers').appendChild(i);
+  }
+
+  // The selection: the part outside it dimmed, two handles with their times.
+  const dimL = el('rect', { class: 'dim', x: L, y: T, width: 0, height: ph });
+  const dimR = el('rect', { class: 'dim', x: L, y: T, width: 0, height: ph });
+  const hA = el('line', { class: 'handle', y1: T, y2: T + ph }), hB = el('line', { class: 'handle', y1: T, y2: T + ph });
+  const tagA = el('text', { class: 'handle-tag', y: T + 1, 'text-anchor': 'end' }), tagB = el('text', { class: 'handle-tag', y: T + 1, 'text-anchor': 'start' });
+  const bgA = el('rect', { class: 'handle-bg', y: T - 9, width: 34, height: 13, rx: 2 }), bgB = el('rect', { class: 'handle-bg', y: T - 9, width: 34, height: 13, rx: 2 });
+  const selG = el('g', { visibility: 'hidden' });
+  selG.append(dimL, dimR, hA, hB, bgA, tagA, bgB, tagB);
   const showSel = (a, b) => {
-    sel.setAttribute('x', L + Math.min(a, b) * slot);
-    sel.setAttribute('width', Math.abs(a - b) * slot);
-    sel.setAttribute('visibility', 'visible');
+    const xa = L + a * slot, xb = L + b * slot;
+    dimL.setAttribute('width', Math.max(0, xa - L));
+    dimR.setAttribute('x', xb); dimR.setAttribute('width', Math.max(0, L + pw - xb));
+    hA.setAttribute('x1', xa); hA.setAttribute('x2', xa); hB.setAttribute('x1', xb); hB.setAttribute('x2', xb);
+    bgA.setAttribute('x', xa - 36); tagA.setAttribute('x', xa - 4); tagA.textContent = fmtDuration(offset + a);
+    bgB.setAttribute('x', xb + 2); tagB.setAttribute('x', xb + 4); tagB.textContent = fmtDuration(offset + b);
+    selG.setAttribute('visibility', 'visible');
   };
+  const playhead = el('line', { class: 'playhead', y1: T - 4, y2: T + ph });
+  const cap = el('polygon', { class: 'playhead-cap' });
+  const setPlayhead = (sec) => {
+    const x = L + Math.min(n, Math.max(0, sec)) * slot;
+    playhead.setAttribute('x1', x); playhead.setAttribute('x2', x);
+    cap.setAttribute('points', `${x - 5},${T - 4} ${x + 5},${T - 4} ${x},${T + 2}`);
+  };
+  setPlayhead(state.previewAt);
+
+  // Click a second to preview there; drag to set In and Out; double-click to clear; hover reads the value.
+  const hit = el('rect', { class: 'hit', x: L, y: T, width: pw, height: ph });
+  svg.append(selG, playhead, cap, hit);
+  const secAt = (e) => Math.min(n, Math.max(0, Math.round((e.clientX - svg.getBoundingClientRect().left - L) / slot)));
+  const tip = $('chart-tip');
   let s0 = null;
   hit.addEventListener('pointerdown', (e) => { s0 = secAt(e); hit.setPointerCapture(e.pointerId); });
-  hit.addEventListener('pointermove', (e) => { if (s0 !== null) showSel(s0, secAt(e)); });
+  hit.addEventListener('pointermove', (e) => {
+    if (s0 !== null) { showSel(Math.min(s0, secAt(e)), Math.max(s0, secAt(e))); return; }
+    const sec = Math.min(n - 1, secAt(e));
+    const row = data[sec];
+    const hold = r.summary.holds.find(([at, ms]) => sec + 0.5 >= at - 0.5 && sec + 0.5 <= at + ms / 1000 + 0.5);
+    tip.textContent = `${fmtDuration(offset + sec)} · ${row ? row[1] : '–'} fps` + (hold ? ` · ${hold[1].toFixed(0)} ms ${hold[2] === 'static' ? 'still' : hold[2]}` : '');
+    tip.hidden = false;
+    const x = L + sec * slot;
+    tip.style.left = `${x + 150 > W ? x - 10 - tip.offsetWidth : x + 10}px`;
+  });
+  hit.addEventListener('pointerleave', () => { tip.hidden = true; });
   hit.addEventListener('pointerup', (e) => {
     if (s0 === null) return;
     const s1 = secAt(e), a = Math.min(s0, s1), b = Math.max(s0, s1);
     s0 = null;
-    if (b - a >= 1) {
-      showSel(a, b);
-      setRange(offset + a, offset + b);
-    } else {
-      sel.setAttribute('visibility', 'hidden');
-      state.previewAt = Math.min(a, Math.max(0, n - 1)) + 0.5;
-      runPreview();
-    }
+    if (b - a >= 1) setRange(offset + a, offset + b);
+    else seekTo(Math.min(a, Math.max(0, n - 1)) + 0.5);
   });
-  hit.addEventListener('dblclick', () => { setRange(null, null); sel.setAttribute('visibility', 'hidden'); });
+  hit.addEventListener('dblclick', () => setRange(null, null));
   if (state.range) {
     const [a, b] = state.range;
     if (a >= offset && b <= offset + n) showSel(a - offset, b - offset);
   }
   host.appendChild(svg);
+  chartApi = { setPlayhead };
 }
 
-/** Write a chart selection into the Start and End fields (null clears both). */
+/** Write a timeline selection into the In and Out fields (null clears both), then redraw the handles. */
 function setRange(a, b) {
   state.range = a === null ? null : [a, b];
   for (const [id, v] of [['opt-start', a], ['opt-end', b]]) {
@@ -976,43 +1366,134 @@ function setRange(a, b) {
     setTimeout(() => n.classList.remove('picked'), 1200);
   }
   $('range-hint').textContent = a === null
-    ? 'Click a second to preview the overlay there. Drag across the chart to set Start and End, then press Analyse to measure only that part. Double-click to clear.'
-    : `Start and End set to ${fmtStamp(a)}–${fmtStamp(b)}. Press Analyse to measure only that part. Double-click the chart to clear.`;
+    ? 'Click a second to preview the overlay there. Drag across the chart to set In and Out, then press Analyse to measure only that part. Double-click to clear.'
+    : `In and Out set to ${fmtStamp(a)}–${fmtStamp(b)}. Press Analyse to measure only that part. Double-click the chart to clear.`;
+  updateRangeReadout();
+  syncSummaries();
+  updateRunButton();
+  drawChart();
 }
 
-new ResizeObserver(() => { if (!$('view-results').hidden) drawChart(); }).observe($('chart'));
+// Set In / Set Out take the playhead; the other end keeps its value or the clip's edge.
+$('set-in').addEventListener('click', () => {
+  if (!state.current) return;
+  const off = (state.opts && state.opts.start) || 0, dur = state.current.info.duration;
+  const at = off + Math.floor(state.previewAt);
+  const end = state.range && state.range[1] > at ? state.range[1] : Math.floor(dur);
+  if (end - at >= 1) setRange(at, end);
+});
+$('set-out').addEventListener('click', () => {
+  if (!state.current) return;
+  const off = (state.opts && state.opts.start) || 0;
+  const at = off + Math.ceil(state.previewAt);
+  const start = state.range && state.range[0] < at ? state.range[0] : 0;
+  if (at - start >= 1) setRange(start, at);
+});
+$('range-clear').addEventListener('click', () => setRange(null, null));
+$('analyse-sel').addEventListener('click', () => $('run').click());
+
+new ResizeObserver(() => { if (viewIs('view-work')) drawChart(); }).observe($('chart'));
 
 // ---------- compare ----------
 
 const compare = { inputs: [], out: null };
+const TRACE_COLORS = ['#4F9CF9', '#C084FC', '#34D399', '#FB923C'];
+
+/** The queue item whose rendered or source video is this compare input, if it was analysed this session. */
+const compareItem = (file) => state.queue.find((q) => q.result && (q.result.overlayVideo === file || q.result.video === file));
 
 function renderCompareList() {
-  const ol = $('compare-list');
-  ol.replaceChildren();
+  const box = $('compare-list');
+  box.replaceChildren();
   compare.inputs.forEach((inp, i) => {
-    const li = document.createElement('li');
-    const name = document.createElement('span');
-    name.className = 'name';
+    const col = node('article', 'panel col');
+    col.style.setProperty('--tc', TRACE_COLORS[i % TRACE_COLORS.length]);
+    const head = node('div', 'col-head');
+    const name = node('span', 'col-name', fileName(inp.file));
     name.title = inp.file;
-    name.textContent = fileName(inp.file);
-    const off = document.createElement('input');
-    off.type = 'text'; off.inputMode = 'decimal'; off.placeholder = 'Offset'; off.value = inp.offset || '';
-    off.title = 'Start this video this many seconds in (seconds or m:ss)';
-    off.addEventListener('input', () => { inp.offset = off.value; });
-    const label = document.createElement('input');
-    label.type = 'text'; label.placeholder = 'Label'; label.value = inp.label;
-    label.addEventListener('input', () => { inp.label = label.value; });
-    const rm = document.createElement('button');
-    rm.type = 'button'; rm.className = 'btn-icon'; rm.textContent = '×'; rm.title = 'Remove';
+    const rm = node('button', 'btn btn-icon btn-xs');
+    rm.type = 'button';
+    rm.setAttribute('aria-label', 'Remove');
+    rm.title = 'Remove';
+    const x = el('svg', { class: 'ico ico-s', viewBox: '0 0 24 24', 'aria-hidden': 'true' });
+    x.appendChild(el('path', { d: 'M6 6l12 12M18 6L6 18' }));
+    rm.appendChild(x);
     rm.addEventListener('click', () => { compare.inputs.splice(i, 1); renderCompareList(); });
-    li.append(name, off, label, rm);
-    ol.appendChild(li);
+    head.append(node('span', 'sw'), name, node('span', 'col-letter', String.fromCharCode(65 + i)), rm);
+    const fields = node('div', 'col-fields');
+    const lf = node('div', 'field'), of = node('div', 'field');
+    const label = node('input', 'input');
+    label.type = 'text'; label.placeholder = 'Label'; label.value = inp.label; label.id = `compare-label-${i}`;
+    label.addEventListener('input', () => { inp.label = label.value; });
+    const off = node('input', 'input mono');
+    off.type = 'text'; off.inputMode = 'decimal'; off.placeholder = '0:00'; off.value = inp.offset || ''; off.id = `compare-offset-${i}`;
+    off.title = 'Start this video this many seconds in (seconds or m:ss)';
+    off.addEventListener('input', () => { inp.offset = off.value; drawCompareChart(); });
+    const ll = node('label', 'fl', 'Pane label'), ol = node('label', 'fl', 'Start at');
+    ll.htmlFor = label.id; ol.htmlFor = off.id;
+    lf.append(ll, label); of.append(ol, off);
+    fields.append(lf, of);
+    col.append(head, fields);
+    const q = compareItem(inp.file);
+    if (q) {
+      const s = q.result.summary, held = Math.round(100 - s.frames_missing_target_pct);
+      const kv = node('div');
+      for (const [k, v, cls] of [['On target', `${held}%`, `lv-${held >= 95 ? 'ok' : held >= 80 ? 'warn' : 'bad'}`], ['Average', `${s.avg_fps.toFixed(1)} fps`], ['1% low', `${s.low_1pct_fps.toFixed(1)} fps`], ['Hitches', String(s.hitches.count)]]) {
+        const row = node('div', 'kv');
+        row.append(node('span', '', k), node('b', cls || '', v));
+        kv.appendChild(row);
+      }
+      col.appendChild(kv);
+    }
+    box.appendChild(col);
   });
   $('compare-run').disabled = compare.inputs.length < 2 || compare.inputs.length > 4 || state.running;
-  $('compare-status').textContent = compare.inputs.length < 2 ? 'Add at least two videos.' : compare.inputs.length > 4 ? 'At most four videos.' : '';
+  $('compare-status').textContent = compare.inputs.length < 2 ? 'Add at least two rendered videos.' : compare.inputs.length > 4 ? 'At most four videos.' : '';
+  drawCompareChart();
 }
 
-$('compare-open').addEventListener('click', () => {
+/** The aligned FPS traces of the inputs analysed this session; hidden when none are known. */
+function drawCompareChart() {
+  const host = $('compare-chart'), panel = $('compare-chart-panel');
+  host.replaceChildren();
+  $('compare-legend').replaceChildren();
+  const traces = compare.inputs.map((inp, i) => ({ inp, i, q: compareItem(inp.file), off: parseTime(String(inp.offset || '0')) || 0 })).filter((t) => t.q);
+  panel.hidden = !traces.length;
+  if (!traces.length || !viewIs('view-compare')) return;
+  const W = host.clientWidth, H = host.clientHeight;
+  if (!W) return;
+  const L = 34, R = 8, T = 10, B = 24, pw = W - L - R, ph = H - T - B;
+  const n = Math.max(1, ...traces.map((t) => t.q.result.perSecond.length - Math.floor(t.off)));
+  const target = Math.max(...traces.map((t) => t.q.result.summary.target_fps));
+  const maxY = Math.max(target * 1.25, ...traces.flatMap((t) => t.q.result.perSecond.map((d) => d[1])));
+  const y = (v) => T + ph - (v / maxY) * ph;
+  const svg = el('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Frames per second of the compared recordings over the same timeline' });
+  for (const v of [0, target / 2, target]) {
+    svg.appendChild(el('line', { class: 'grid', x1: L, x2: W - R, y1: y(v), y2: y(v) }));
+    svg.appendChild(el('text', { class: 'axis', x: L - 6, y: y(v) + 4, 'text-anchor': 'end' }, String(Math.round(v))));
+  }
+  const slot = pw / n;
+  for (const t of traces) {
+    const color = TRACE_COLORS[t.i % TRACE_COLORS.length];
+    const pts = t.q.result.perSecond.filter(([sec]) => sec >= t.off).map(([sec, fps]) => `${(L + (sec - t.off) * slot).toFixed(1)},${y(fps).toFixed(1)}`);
+    svg.appendChild(el('polyline', { class: 'trace', stroke: color, points: pts.join(' ') }));
+    const leg = node('span');
+    const sw = node('i', 'sw');
+    sw.style.background = color;
+    leg.append(sw, `${String.fromCharCode(65 + t.i)} · ${t.inp.label || fileName(t.inp.file)}`);
+    $('compare-legend').appendChild(leg);
+  }
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800];
+  const every = steps.find((s) => n / s <= 8) || 3600;
+  for (let sec = 0; sec <= n; sec += every) {
+    const x = L + sec * slot;
+    svg.appendChild(el('text', { class: 'axis', x, y: H - 6, 'text-anchor': sec === 0 ? 'start' : x > W - R - 24 ? 'end' : 'middle' }, fmtDuration(sec)));
+  }
+  host.appendChild(svg);
+}
+new ResizeObserver(() => drawCompareChart()).observe($('compare-chart'));
+
+function openCompare() {
   // The videos rendered this session are the natural picks.
   if (!compare.inputs.length) {
     for (const q of state.queue) {
@@ -1020,10 +1501,9 @@ $('compare-open').addEventListener('click', () => {
     }
   }
   $('compare-play').hidden = $('compare-show').hidden = !compare.out;
+  show('view-compare');
   renderCompareList();
-  $('compare').showModal();
-});
-$('compare-close').addEventListener('click', () => $('compare').close());
+}
 $('compare-add').addEventListener('click', async () => {
   for (const p of await window.api.pickVideo()) {
     if (!compare.inputs.some((i) => i.file === p)) compare.inputs.push({ file: p, offset: '', label: fileName(p).replace(/\.[^.]+$/, '').replace(/_fps$/, '') });
@@ -1074,10 +1554,11 @@ $('copy-summary').addEventListener('click', async () => {
   if (s.static_holds.count || s.loading.count) lines.push(`Left out: ${s.static_holds.seconds} s still, ${s.loading.seconds} s loading`);
   if (c.dropped_by_recorder) lines.push(`Recorder dropped ${c.dropped_by_recorder} refreshes`);
   const b = $('copy-summary');
+  const label = b.lastChild;
   try {
     await navigator.clipboard.writeText(lines.join('\n'));
-    b.textContent = 'Copied';
-    setTimeout(() => { b.textContent = 'Copy summary'; }, 1500);
+    label.textContent = 'Copied';
+    setTimeout(() => { label.textContent = 'Copy summary'; }, 1500);
   } catch (e) {
     addWarning(`Could not copy: ${e.message}`);
   }
@@ -1087,7 +1568,7 @@ $('copy-summary').addEventListener('click', async () => {
 
 // Every option a preset holds: control id (or radio group name) and how to read it.
 const PRESET_CONTROLS = {
-  position: ['opt-pos', 'radio'], style: ['opt-style', 'radio'], encoder: ['opt-enc', 'radio'],
+  position: ['opt-pos', 'radio'], style: ['opt-style', 'radio'], theme: ['opt-theme', 'radio'], encoder: ['opt-enc', 'radio'],
   showTarget: ['opt-target-pill', 'checked'], showFormat: ['opt-format-pill', 'checked'],
   caption: ['opt-caption', 'value'], captionPosition: ['opt-caption-pos', 'value'],
   watermarkOn: ['opt-watermark-on', 'checked'], watermark: ['opt-watermark', 'value'],
@@ -1160,4 +1641,7 @@ $('preset-delete').addEventListener('click', () => {
 });
 refreshPresetList();
 
+state.library = loadLibrary();
+renderLibrary();
+show('view-library');
 checkTools();

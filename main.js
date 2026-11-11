@@ -20,7 +20,7 @@ function createWindow() {
     height: 800,
     minWidth: 980,
     minHeight: 680,
-    backgroundColor: '#101317',
+    backgroundColor: '#0B0C0F',
     title: 'Capture FPS',
     autoHideMenuBar: true,
     webPreferences: {
@@ -97,7 +97,7 @@ ipcMain.handle('probe', async (_e, video) => {
   try {
     if (!fs.existsSync(video)) return { ok: false, error: 'File not found' };
     const info = await probe(video);
-    return { ok: true, info, outDir: defaultOutDir(video), name: path.basename(video), targets: targetsFor(info.hz) };
+    return { ok: true, info, outDir: defaultOutDir(video), name: path.basename(video), targets: targetsFor(info.hz), size: fs.statSync(video).size };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -133,6 +133,20 @@ ipcMain.handle('compare', (_e, opts) => asJob(async (signal) => {
   outDirs.add(path.dirname(r.path));
   return { ok: true, result: r };
 }));
+
+// A finished run from an earlier session, read back from its output folder (those two files only).
+ipcMain.handle('load-result', (_e, outDir) => {
+  try {
+    if (typeof outDir !== 'string') return { ok: false };
+    const summary = JSON.parse(fs.readFileSync(path.join(outDir, 'summary.json'), 'utf8'));
+    const perSecond = fs.readFileSync(path.join(outDir, 'per_second.csv'), 'utf8').trim().split(/\r?\n/).slice(1)
+      .map((l) => l.split(',').map(Number)).filter((r) => r.length === 2 && r.every(Number.isFinite));
+    outDirs.add(path.resolve(outDir));
+    return { ok: true, result: { summary, perSecond } };
+  } catch (_) {
+    return { ok: false };
+  }
+});
 
 ipcMain.handle('cancel-job', () => {
   if (job) job.controller.abort();
