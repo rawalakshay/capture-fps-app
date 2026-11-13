@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; media-src 'self' file:">
 <title>Capture FPS</title>
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -95,7 +95,7 @@
       <button type="button" id="copy-summary" class="btn btn-sm" title="Copy the key numbers as text">
         <svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy summary
       </button>
-      <button type="button" id="compare-open" class="btn btn-sm" title="Stack two or more rendered videos side by side">
+      <button type="button" id="compare-open" class="btn btn-sm" title="Compare two analysed recordings, or stack rendered videos side by side">
         <svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="8" height="14" rx="1.5"></rect><rect x="13" y="5" width="8" height="14" rx="1.5"></rect></svg>Compare
       </button>
       <button type="button" id="open-video" class="btn btn-sm btn-primary">
@@ -210,26 +210,334 @@
   <section id="view-compare" class="view view-compare" hidden>
     <header class="topbar">
       <h1 class="topbar-name">Compare</h1>
-      <span class="hint">Two to four rendered videos, lined up by their offsets · sound from the first</span>
+      <div class="segbar" role="radiogroup" aria-label="Compare mode">
+        <input class="vis" type="radio" name="compare-mode" id="mode-ab" value="ab" checked><label for="mode-ab">Analysis</label>
+        <input class="vis" type="radio" name="compare-mode" id="mode-edit" value="edit"><label for="mode-edit">Edit &amp; export</label>
+        <input class="vis" type="radio" name="compare-mode" id="mode-stack" value="stack"><label for="mode-stack">Stack 2–4</label>
+      </div>
       <span class="spacer"></span>
-      <label class="hint" for="compare-layout">Layout</label>
-      <select id="compare-layout" class="input sel input-auto">
-        <option value="h">Side by side</option>
-        <option value="v">Stacked</option>
-        <option value="grid">Grid</option>
-      </select>
-      <button type="button" id="compare-add" class="btn btn-sm"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Add recording</button>
-      <button type="button" id="compare-run" class="btn btn-sm btn-primary" disabled><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"></path><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path></svg>Export comparison</button>
+      <div class="btn-row btn-row-end" id="ab-actions">
+        <button type="button" id="ab-swap" class="btn btn-sm" title="Put B on the left"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h13l-4-4M17 17H4l4 4"></path></svg>Swap A ⇄ B</button>
+        <button type="button" id="ab-copy" class="btn btn-sm" title="Copy the verdict and the numbers as text"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy summary</button>
+        <details class="menu" id="ab-export-menu">
+          <summary class="btn btn-sm btn-primary" id="ab-export-open"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"></path><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path></svg>Export side-by-side<svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary>
+          <div class="ab-menu" role="dialog" aria-label="Export settings">
+            <div class="ab-menu-head"><b>Export side-by-side</b><span class="hint">A and B, with their titles and subtitles, are drawn on the video</span></div>
+            <div class="field">
+              <span class="fl" id="abx-frame-label">Frame</span>
+              <div class="segbar segbar-in segbar-grid" role="radiogroup" aria-labelledby="abx-frame-label">
+                <input class="vis" type="radio" name="abx-frame" id="abx-frame-169" value="16:9" checked><label for="abx-frame-169">16:9</label>
+                <input class="vis" type="radio" name="abx-frame" id="abx-frame-219" value="21:9"><label for="abx-frame-219">21:9 ultrawide</label>
+              </div>
+            </div>
+            <div class="field">
+              <span class="fl" id="abx-fit-label">Fit</span>
+              <div class="segbar segbar-in segbar-grid" role="radiogroup" aria-labelledby="abx-fit-label">
+                <input class="vis" type="radio" name="abx-fit" id="abx-fit-letterbox" value="letterbox" checked><label for="abx-fit-letterbox">Letterbox</label>
+                <input class="vis" type="radio" name="abx-fit" id="abx-fit-crop" value="crop"><label for="abx-fit-crop">Crop</label>
+                <input class="vis" type="radio" name="abx-fit" id="abx-fit-below" value="below"><label for="abx-fit-below">Data below</label>
+              </div>
+              <span class="hint" id="abx-fit-hint"></span>
+            </div>
+            <div class="field">
+              <span class="fl" id="abx-size-label">Size</span>
+              <div class="segbar segbar-in segbar-grid mono" role="radiogroup" aria-labelledby="abx-size-label" id="abx-sizes"></div>
+            </div>
+            <div class="field" id="abx-upscaler-row"><label class="fl" for="abx-upscaler">Upscaler</label>
+              <select id="abx-upscaler" class="input sel">
+                <option value="lanczos" selected>Lanczos</option>
+                <option value="sharp">Lanczos + sharpen</option>
+                <option value="fsrcnnx">FSRCNNX on the GPU</option>
+              </select>
+            </div>
+            <div class="ab-menu-sum">
+              <span class="mono" id="abx-sum"></span>
+              <b id="abx-time" hidden></b>
+              <span class="hint" id="abx-hevc" hidden>Above 4096 px wide the GPU encoder switches to HEVC; the CPU encoder stays H.264.</span>
+              <span class="hint">The 5 s results card comes last, inside YouTube's end-screen time: keep end-screen elements off it.</span>
+            </div>
+            <div class="btn-row btn-row-end">
+              <button type="button" id="abx-cancel" class="btn">Cancel</button>
+              <button type="button" id="abx-go" class="btn btn-primary">Export</button>
+            </div>
+          </div>
+        </details>
+      </div>
+      <div class="btn-row btn-row-end" id="ed-actions" hidden>
+        <details class="menu" id="ed-layout-menu">
+          <summary class="ed-layout-btn" id="ed-layout-open" title="Frame, layout and size of the export; the monitor follows it"><span class="ed-dim">Layout</span><b id="ed-layout-sum"></b><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary>
+          <div class="ab-menu" role="dialog" aria-label="Layout of the export">
+            <div class="ab-menu-head"><b>Layout</b><span class="hint">The program monitor shows the export in this layout</span></div>
+            <div class="field">
+              <span class="fl" id="edx-frame-label">Frame</span>
+              <div class="segbar segbar-in segbar-grid" role="radiogroup" aria-labelledby="edx-frame-label">
+                <input class="vis" type="radio" name="edx-frame" id="edx-frame-169" value="16:9" checked><label for="edx-frame-169">16:9</label>
+                <input class="vis" type="radio" name="edx-frame" id="edx-frame-219" value="21:9"><label for="edx-frame-219">21:9 ultrawide</label>
+              </div>
+            </div>
+            <div class="field">
+              <span class="fl" id="edx-fit-label">Fit</span>
+              <div class="segbar segbar-in segbar-grid" role="radiogroup" aria-labelledby="edx-fit-label" id="edx-fits"></div>
+              <span class="hint" id="edx-fit-hint"></span>
+            </div>
+            <div class="field">
+              <span class="fl" id="edx-size-label">Size</span>
+              <div class="segbar segbar-in segbar-grid mono" role="radiogroup" aria-labelledby="edx-size-label" id="edx-sizes"></div>
+            </div>
+            <div class="ab-menu-sum">
+              <span class="mono" id="edx-sum"></span>
+              <span class="hint" id="edx-hevc" hidden>Above 4096 px wide the GPU encoder switches to HEVC; the CPU encoder stays H.264.</span>
+              <span class="hint">Encoder and quality come from a recording's Export options. The 5 s results card comes last.</span>
+            </div>
+          </div>
+        </details>
+        <button type="button" id="ed-export" class="btn btn-sm btn-primary" title="Render the export range in this layout"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"></path><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path></svg>Export</button>
+      </div>
+      <div class="btn-row btn-row-end" id="stack-actions" hidden>
+        <label class="hint" for="compare-layout">Layout</label>
+        <select id="compare-layout" class="input sel input-auto">
+          <option value="h">Side by side</option>
+          <option value="v">Stacked</option>
+          <option value="grid">Grid</option>
+        </select>
+        <button type="button" id="compare-add" class="btn btn-sm"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Add recording</button>
+        <button type="button" id="compare-run" class="btn btn-sm btn-primary" disabled><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"></path><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path></svg>Export comparison</button>
+      </div>
     </header>
-    <div id="compare-list" class="compare-cols"></div>
-    <section class="panel compare-chart-panel" id="compare-chart-panel" hidden>
-      <div class="tl-head"><span class="tl-title">FPS, aligned</span><span class="hint">Offsets applied · recordings analysed this session only</span><span class="spacer"></span><span class="legend" id="compare-legend"></span></div>
-      <div id="compare-chart" class="chart"></div>
-    </section>
     <div class="compare-foot">
       <p id="compare-status" class="hint"></p>
       <button type="button" id="compare-play" class="btn btn-sm" hidden>Play</button>
       <button type="button" id="compare-show" class="btn btn-sm" hidden>Show in folder</button>
+      <button type="button" id="compare-cancel" class="btn btn-sm btn-danger" hidden>Cancel</button>
+    </div>
+
+    <!-- A / B: two analysed recordings, played in sync and compared number by number -->
+    <div id="ab-mode" class="ab">
+      <section class="panel ab-verdict" id="ab-verdict" aria-label="Verdict">
+        <div class="ab-lead" id="ab-lead"></div>
+        <p id="ab-sentence"></p>
+        <div class="chips" id="ab-chips"></div>
+      </section>
+
+      <section class="ab-panes" aria-label="Videos">
+        <article class="panel ab-pane" id="ab-pane-a">
+          <div class="ab-head">
+            <span class="ab-tag mono">A</span>
+            <input id="ab-title-a" class="input ab-title" type="text" placeholder="Title" aria-label="Title for A" autocomplete="off">
+            <input id="ab-sub-a" class="input ab-sub" type="text" placeholder="Subtitle (optional)" aria-label="Subtitle for A" autocomplete="off">
+            <details class="menu menu-right ab-pick"><summary class="btn btn-xs" id="ab-change-a">Change</summary><div class="menu-list" id="ab-list-a"></div></details>
+          </div>
+          <div class="ab-video">
+            <video id="ab-video-a" preload="auto" playsinline muted></video>
+            <img id="ab-still-a" alt="" hidden>
+            <span class="ab-none" id="ab-none-a">Choose a recording that has been analysed</span>
+            <span class="ab-fmt mono" id="ab-fmt-a" hidden></span>
+            <div class="ab-live mono" id="ab-live-a" hidden><b></b><span></span></div>
+            <span class="ab-hitch mono" id="ab-hitch-a" hidden></span>
+          </div>
+          <div class="ab-foot"><span>Offset</span><span class="mono ab-off-val">+0.000 s</span><span class="spacer"></span><span>Reference clock</span></div>
+        </article>
+        <article class="panel ab-pane" id="ab-pane-b">
+          <div class="ab-head">
+            <span class="ab-tag mono">B</span>
+            <input id="ab-title-b" class="input ab-title" type="text" placeholder="Title" aria-label="Title for B" autocomplete="off">
+            <input id="ab-sub-b" class="input ab-sub" type="text" placeholder="Subtitle (optional)" aria-label="Subtitle for B" autocomplete="off">
+            <details class="menu menu-right ab-pick"><summary class="btn btn-xs" id="ab-change-b">Change</summary><div class="menu-list" id="ab-list-b"></div></details>
+          </div>
+          <div class="ab-video">
+            <video id="ab-video-b" preload="auto" playsinline muted></video>
+            <img id="ab-still-b" alt="" hidden>
+            <span class="ab-none" id="ab-none-b">Choose a recording that has been analysed</span>
+            <span class="ab-fmt mono" id="ab-fmt-b" hidden></span>
+            <div class="ab-live mono" id="ab-live-b" hidden><b></b><span></span></div>
+            <span class="ab-hitch mono" id="ab-hitch-b" hidden></span>
+          </div>
+          <div class="ab-foot">
+            <label for="ab-offset">Offset</label>
+            <button type="button" class="ab-step" data-step="-1" aria-label="Back one second" title="Back one second">«</button>
+            <button type="button" class="ab-step" data-step="-f" aria-label="Back one frame" title="Back one frame">‹</button>
+            <input id="ab-offset" class="input mono ab-off" type="text" inputmode="decimal" value="+0.000 s" autocomplete="off" title="B starts this many seconds later in its recording than A (negative: earlier)">
+            <button type="button" class="ab-step" data-step="f" aria-label="Forward one frame" title="Forward one frame">›</button>
+            <button type="button" class="ab-step" data-step="1" aria-label="Forward one second" title="Forward one second">»</button>
+            <span class="spacer"></span>
+            <span class="ab-ellip" id="ab-off-note">+0.0 s vs A</span>
+          </div>
+        </article>
+      </section>
+
+      <div class="ab-body" id="ab-body">
+        <section class="panel ab-play" aria-label="Playback">
+          <button type="button" id="ab-playbtn" class="btn btn-primary btn-icon" aria-label="Play both" title="Play both (Space)"><svg class="ico ico-s ab-fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4l14 8-14 8z"></path></svg></button>
+          <button type="button" id="ab-prev-hitch" class="btn btn-icon btn-xs" aria-label="Previous hitch in either video" title="Previous hitch in either video"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 20L9 12l10-8zM5 19V5"></path></svg></button>
+          <button type="button" id="ab-back" class="btn btn-icon btn-xs" aria-label="Back one frame" title="Back one frame (,)"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button>
+          <button type="button" id="ab-fwd" class="btn btn-icon btn-xs" aria-label="Forward one frame" title="Forward one frame (.)"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
+          <button type="button" id="ab-next-hitch" class="btn btn-icon btn-xs" aria-label="Next hitch in either video" title="Next hitch in either video (H)"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4l10 8-10 8zM19 5v14"></path></svg></button>
+          <span class="mono ab-time"><span id="ab-now">0:00.00</span> <span class="ab-dim" id="ab-total">/ 0:00</span></span>
+          <input type="range" id="ab-scrub" min="0" max="0" step="0.01" value="0" aria-label="Position on the shared timeline">
+          <div class="segbar" role="radiogroup" aria-label="Sound from">
+            <span class="segbar-label">Sound</span>
+            <input class="vis" type="radio" name="ab-sound" id="ab-sound-a" value="a" checked><label class="mono" for="ab-sound-a">A</label>
+            <input class="vis" type="radio" name="ab-sound" id="ab-sound-b" value="b"><label class="mono" for="ab-sound-b">B</label>
+          </div>
+        </section>
+
+        <section class="panel ab-chart" aria-label="Frame rate, aligned">
+          <div class="tl-head">
+            <span class="tl-title" id="ab-chart-title">FPS, aligned</span>
+            <div class="segbar segbar-in" role="radiogroup" aria-label="Graph shows">
+              <input class="vis" type="radio" name="ab-view" id="ab-view-fps" value="fps" checked><label for="ab-view-fps">FPS</label>
+              <input class="vis" type="radio" name="ab-view" id="ab-view-pct" value="pct"><label for="ab-view-pct">% of target</label>
+              <input class="vis" type="radio" name="ab-view" id="ab-view-ft" value="ft"><label for="ab-view-ft">Frame time</label>
+            </div>
+            <span class="hint" id="ab-chart-hint">Offsets applied · click to jump both videos</span>
+            <span class="spacer"></span>
+            <span class="legend" id="ab-legend"></span>
+          </div>
+          <div class="ab-plot">
+            <div class="ab-y mono" id="ab-y"></div>
+            <svg id="ab-svg" class="ab-svg" viewBox="0 0 1000 160" preserveAspectRatio="none" role="img"></svg>
+          </div>
+          <div class="ab-lanes">
+            <span class="mono">A</span><div class="ab-lane" id="ab-lane-a"></div>
+            <span class="mono">B</span><div class="ab-lane" id="ab-lane-b"></div>
+          </div>
+          <div id="ab-diff">
+            <div class="tl-head ab-diff-head"><span class="tl-title">Difference, A − B</span><span class="hint" id="ab-diff-hint">Above the line A is ahead, below it B is ahead</span></div>
+            <div class="ab-plot">
+              <div class="ab-y mono" id="ab-diff-y"></div>
+              <svg id="ab-diff-svg" class="ab-svg ab-svg-diff" viewBox="0 0 1000 80" preserveAspectRatio="none" role="img"></svg>
+            </div>
+          </div>
+          <div class="ab-plot"><span></span><div class="ab-ticks mono" id="ab-ticks"></div></div>
+        </section>
+
+        <div class="ab-tables">
+          <section class="panel ab-table" aria-label="Numbers side by side">
+            <div class="ab-table-head"><h2>Numbers</h2><span class="hint">Where both play, as the export shows them</span></div>
+            <div class="ab-scroll">
+              <table>
+                <thead><tr><th scope="col">Metric</th><th scope="col" class="ab-ca" id="ab-th-a">A</th><th scope="col" class="ab-cb" id="ab-th-b">B</th><th scope="col">Better</th></tr></thead>
+                <tbody class="mono" id="ab-numbers"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel ab-table" aria-label="Hitches side by side">
+            <div class="ab-table-head"><h2>Hitches</h2><span class="hint">Within 0.5 s of each other counts as the same spot</span></div>
+            <div class="ab-scroll ab-scroll-tall">
+              <table class="ab-fixed">
+                <thead><tr><th scope="col">At</th><th scope="col" class="ab-ca">A</th><th scope="col" class="ab-cb">B</th><th scope="col">Where</th></tr></thead>
+                <tbody class="mono" id="ab-hitches"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit & export: tracks of clips on one timeline, previewed in the export's layout -->
+    <div id="edit-mode" class="ed" hidden>
+      <div class="ed-top">
+        <section class="panel ed-program" aria-label="Program monitor">
+          <div class="ed-bar">
+            <h2>Program</h2>
+            <span class="mono ed-desc" id="ed-desc"></span>
+            <span class="spacer"></span>
+            <div class="segbar" role="radiogroup" aria-label="Preview quality">
+              <input class="vis" type="radio" name="ed-quality" id="ed-live" value="live" checked><label for="ed-live" title="Plays live; the overlay is drawn by the app">Live</label>
+              <input class="vis" type="radio" name="ed-quality" id="ed-exact" value="exact"><label for="ed-exact" title="The exact export frame from ffmpeg, a few seconds per frame. Its live FPS uses the export's 0.5 s window, so it can read a little off Live's per-second number">Exact frame</label>
+            </div>
+            <button type="button" id="ed-safe" class="ed-chip" aria-pressed="true" title="YouTube's controls cover the bottom 8%">Safe area</button>
+            <button type="button" id="ed-full" class="ed-icon" aria-label="Full-screen preview (F)" title="Full-screen preview (F)"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path></svg></button>
+          </div>
+          <div class="ed-monitor" id="ed-monitor">
+            <div class="ed-board" id="ed-board"></div>
+            <img class="ed-exact-img" id="ed-exact-img" alt="The exact export frame at the playhead" hidden>
+            <span class="ed-badge mono" id="ed-exact-badge" hidden>Exact</span>
+            <div class="ed-safe-strip" id="ed-safe-strip" aria-hidden="true"></div>
+          </div>
+          <div class="ed-transport">
+            <button type="button" id="ed-start" class="ed-icon" aria-label="Go to the start of the export range" title="Go to the start of the export range"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M18 6l-8 6 8 6z"></path></svg></button>
+            <button type="button" id="ed-back" class="ed-icon" aria-label="One frame back (,)" title="One frame back (,)"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button>
+            <button type="button" id="ed-play" class="ed-playbtn" aria-label="Play (Space)" title="Play (Space)"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 5l12 7-12 7z"></path></svg></button>
+            <button type="button" id="ed-fwd" class="ed-icon" aria-label="One frame on (.)" title="One frame on (.)"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
+            <button type="button" id="ed-end" class="ed-icon" aria-label="Go to the end of the export range" title="Go to the end of the export range"><svg class="ico ico-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14M6 6l8 6-8 6z"></path></svg></button>
+            <span class="mono ed-now" id="ed-now">0:00.00</span>
+            <span class="mono ed-total" id="ed-total"></span>
+            <span class="spacer"></span>
+            <button type="button" id="ed-mark-in" class="ed-ghost" title="Start the export range at the playhead">Mark In <span class="ed-key">I</span></button>
+            <button type="button" id="ed-mark-out" class="ed-ghost" title="End the export range at the playhead">Mark Out <span class="ed-key">O</span></button>
+          </div>
+        </section>
+        <div class="ed-insp-wrap">
+          <aside class="panel ed-insp" aria-label="Inspector">
+            <div role="tablist" aria-label="Inspector" class="ed-tabs">
+              <button type="button" role="tab" class="ed-tab" id="ed-tab-clip" aria-controls="ed-body-clip">Clip</button>
+              <button type="button" role="tab" class="ed-tab" id="ed-tab-tracks" aria-controls="ed-body-tracks">Tracks</button>
+              <button type="button" role="tab" class="ed-tab" id="ed-tab-media" aria-controls="ed-body-media">Media</button>
+            </div>
+            <div class="ed-tab-body" id="ed-body-clip" role="tabpanel" aria-labelledby="ed-tab-clip">
+              <p class="hint" id="ed-clip-none">Select a clip on the timeline, or add a recording to a track from Media.</p>
+              <div class="ed-clip" id="ed-clip">
+                <div class="ed-clip-head">
+                  <span class="ed-tag mono" id="ed-clip-tag"></span>
+                  <div class="ed-clip-names"><span class="ed-clip-name" id="ed-clip-name"></span><span class="ed-clip-meta" id="ed-clip-meta"></span></div>
+                </div>
+                <section class="ed-sect" aria-label="Timing">
+                  <h3 class="ed-sec">Timing</h3>
+                  <div class="ed-timing">
+                    <div class="ed-fld"><label for="ed-f-at">Starts at</label><div class="ed-nudges"><button type="button" class="ed-nudge" data-f="at" data-d="-1" aria-label="Starts at: one frame earlier" title="One frame earlier · Shift: one second">‹</button><input id="ed-f-at" class="mono ed-field" type="text" autocomplete="off" spellcheck="false"><button type="button" class="ed-nudge" data-f="at" data-d="1" aria-label="Starts at: one frame later" title="One frame later · Shift: one second">›</button></div></div>
+                    <div class="ed-fld"><span>Length</span><span class="mono ed-len" id="ed-f-len"></span></div>
+                    <div class="ed-fld"><label for="ed-f-in">In</label><div class="ed-nudges"><button type="button" class="ed-nudge" data-f="in" data-d="-1" aria-label="In: one frame earlier" title="One frame earlier · Shift: one second">‹</button><input id="ed-f-in" class="mono ed-field" type="text" autocomplete="off" spellcheck="false"><button type="button" class="ed-nudge" data-f="in" data-d="1" aria-label="In: one frame later" title="One frame later · Shift: one second">›</button></div></div>
+                    <div class="ed-fld"><label for="ed-f-out">Out</label><div class="ed-nudges"><button type="button" class="ed-nudge" data-f="out" data-d="-1" aria-label="Out: one frame earlier" title="One frame earlier · Shift: one second">‹</button><input id="ed-f-out" class="mono ed-field" type="text" autocomplete="off" spellcheck="false"><button type="button" class="ed-nudge" data-f="out" data-d="1" aria-label="Out: one frame later" title="One frame later · Shift: one second">›</button></div></div>
+                  </div>
+                </section>
+                <section class="ed-sect" aria-label="Crop" id="ed-crop">
+                  <div class="ed-crop-head"><h3 class="ed-sec">Crop</h3><span class="ed-crop-share" id="ed-crop-share"></span><span class="spacer"></span><button type="button" id="ed-centre" class="ed-ghost">Centre</button></div>
+                  <div class="ed-thumb" id="ed-thumb"><img id="ed-thumb-img" alt="" hidden><span class="ed-thumb-win" id="ed-thumb-win"></span></div>
+                  <p class="hint" id="ed-crop-hint" hidden></p>
+                  <div class="ed-sliders">
+                    <label for="ed-pan">Pan</label><input id="ed-pan" type="range" min="-100" max="100" step="1" value="0"><span class="mono" id="ed-pan-val">0%</span>
+                    <label for="ed-zoom-c">Zoom</label><input id="ed-zoom-c" type="range" min="100" max="200" step="1" value="100"><span class="mono" id="ed-zoom-val">100%</span>
+                  </div>
+                </section>
+              </div>
+            </div>
+            <div class="ed-tab-body" id="ed-body-tracks" role="tabpanel" aria-labelledby="ed-tab-tracks" hidden></div>
+            <div class="ed-tab-body" id="ed-body-media" role="tabpanel" aria-labelledby="ed-tab-media" hidden></div>
+          </aside>
+        </div>
+      </div>
+
+      <section class="panel ed-timeline" aria-label="Timeline">
+        <div class="ed-bar">
+          <h2>Timeline</h2>
+          <div class="segbar" role="radiogroup" aria-label="Tool">
+            <input class="vis" type="radio" name="ed-tool" id="ed-tool-select" value="select" checked><label for="ed-tool-select" title="Select, move and trim (V)">Select <span class="ed-key">V</span></label>
+            <input class="vis" type="radio" name="ed-tool" id="ed-tool-split" value="split"><label for="ed-tool-split" title="Split a clip at the click (C)">Split <span class="ed-key">C</span></label>
+          </div>
+          <button type="button" id="ed-snap" class="ed-chip" aria-pressed="true" title="Clips snap to the playhead, clip edges, hitches and the range ends">Snap</button>
+          <span class="mono ed-range" id="ed-range"></span>
+          <span class="spacer"></span>
+          <button type="button" id="ed-add-c" class="ed-ghost" title="Add a third track; the export becomes 21:9 with three videos">+ Track C</button>
+          <label for="ed-zoom" class="ed-zoom-l">Zoom</label>
+          <input id="ed-zoom" type="range" min="0" max="100" step="1" value="0" title="Pixels per second">
+          <button type="button" id="ed-fit" class="ed-ghost" title="Fit the whole timeline">Fit</button>
+        </div>
+        <div class="ed-tl" id="ed-tl">
+          <div class="ed-heads" id="ed-heads"></div>
+          <div class="ed-scroll" id="ed-scroll"><div class="ed-inner" id="ed-inner"></div></div>
+        </div>
+        <span class="hint ed-foot">Drag recordings from Media onto a track · drag a clip to move it (its offset) · drag its edges to trim · a gap shows as NO VIDEO and is not counted</span>
+      </section>
+    </div>
+
+    <div id="stack-mode" hidden>
+      <p class="hint">Two to four rendered videos, lined up by their offsets · sound from the first</p>
+      <div id="compare-list" class="compare-cols"></div>
+      <section class="panel compare-chart-panel" id="compare-chart-panel" hidden>
+        <div class="tl-head"><span class="tl-title">FPS, aligned</span><span class="hint">Offsets applied · recordings analysed this session only</span><span class="spacer"></span><span class="legend" id="compare-legend"></span></div>
+        <div id="compare-chart" class="chart"></div>
+      </section>
     </div>
   </section>
 
@@ -315,7 +623,7 @@
             <label class="look" for="theme-classic"><svg viewBox="0 0 84 40" aria-hidden="true"><rect x="0.5" y="0.5" width="83" height="39" rx="4" fill="#000" stroke="rgba(255,255,255,.14)"></rect><text x="8" y="26" font-family="Plex Mono, monospace" font-size="18" font-weight="600" fill="#7CFC00">57</text><text x="36" y="18" font-family="Plex Mono, monospace" font-size="7" fill="#FFD400">FPS</text><rect x="36" y="22" width="40" height="2" fill="#FFD400"></rect><rect x="36" y="27" width="26" height="2" fill="#7CFC00"></rect></svg>Classic</label>
           </div>
         </div>
-        <div class="looks looks-4" role="radiogroup" aria-label="Overlay look">
+        <div class="looks looks-5" role="radiogroup" aria-label="Overlay look">
           <input class="vis" type="radio" name="opt-style" id="style-panel" value="panel" checked>
           <label class="look" for="style-panel" title="The full instrument panel"><svg viewBox="0 0 64 40" aria-hidden="true"><rect class="lk-frame" x="0.5" y="0.5" width="63" height="39" rx="4"></rect><rect class="lk-hud" x="40" y="5" width="19" height="16" rx="2"></rect></svg>Panel</label>
           <input class="vis" type="radio" name="opt-style" id="style-strip" value="strip">
@@ -324,6 +632,8 @@
           <label class="look" for="style-glass" title="Three glass tiles"><svg viewBox="0 0 64 40" aria-hidden="true"><rect class="lk-frame" x="0.5" y="0.5" width="63" height="39" rx="4"></rect><rect class="lk-hud" x="42" y="5" width="17" height="7" rx="2"></rect><rect class="lk-hud" x="42" y="14" width="17" height="5" rx="2"></rect><rect class="lk-hud" x="42" y="21" width="17" height="7" rx="2"></rect></svg>Glass</label>
           <input class="vis" type="radio" name="opt-style" id="style-none" value="none">
           <label class="look" for="style-none" title="No FPS overlay: watermark, caption and graph only"><svg viewBox="0 0 64 40" aria-hidden="true"><rect class="lk-frame" x="0.5" y="0.5" width="63" height="39" rx="4"></rect><rect class="lk-dim" x="5" y="31" width="14" height="3" rx="1"></rect></svg>None</label>
+          <input class="vis" type="radio" name="opt-style" id="style-bands" value="bands">
+          <label class="look" for="style-bands" title="The video scaled down, with a data panel beside it and a frame-time band below"><svg viewBox="0 0 64 40" aria-hidden="true"><rect class="lk-frame" x="0.5" y="0.5" width="63" height="39" rx="4"></rect><rect class="lk-dim" x="4" y="4" width="40" height="23" rx="1"></rect><rect class="lk-hud" x="47" y="4" width="13" height="23" rx="1"></rect><rect class="lk-hud" x="4" y="30" width="56" height="6" rx="1"></rect></svg>Bands</label>
         </div>
         <div class="field" id="row-pos">
           <span class="fl" id="pos-label">Position</span>
@@ -342,7 +652,8 @@
             </div>
           </div>
         </div>
-        <div class="field">
+        <p class="hint" id="bands-hint" hidden>Bands draws its own panel: caption, pills, the frame-time graph switch and the end card are not used.</p>
+        <div class="field" id="row-caption">
           <label class="fl" for="opt-caption">Caption</label>
           <div class="grid-cap">
             <input id="opt-caption" class="input" type="text" placeholder="None" autocomplete="off">
@@ -361,13 +672,13 @@
           <label for="opt-watermark-on">Watermark</label>
           <input id="opt-watermark" class="input input-sm" type="text" value="4aLse Benchmarks" autocomplete="off" aria-label="Watermark text">
         </div>
-        <div class="tog">
+        <div class="tog" id="row-long">
           <input type="checkbox" id="opt-long" class="switch">
           <label for="opt-long" title="A scrolling frame-time graph along the bottom edge">Frame-time graph</label>
           <input id="opt-long-opacity" type="range" min="0" max="100" value="86" step="2" aria-label="Graph background opacity">
           <span class="range-val mono" id="opt-long-opacity-val">86%</span>
         </div>
-        <div class="tog">
+        <div class="tog" id="row-end-card">
           <input type="checkbox" id="opt-end-card" class="switch">
           <label for="opt-end-card">End card</label>
           <span class="hint">4 s summary over the last frame</span>
@@ -385,6 +696,13 @@
             <input class="vis" type="radio" name="opt-enc" id="enc-cpu" value="cpu" checked><label class="seg" for="enc-cpu">CPU (x264)</label>
           </div>
           <p class="hint" id="enc-gpu-sub">Checking the GPU…</p>
+        </div>
+        <div class="field" id="row-frame" hidden>
+          <span class="fl" id="frame-label">Frame</span>
+          <div class="segs segs-2" role="radiogroup" aria-labelledby="frame-label">
+            <input class="vis" type="radio" name="opt-frame" id="frame-169" value="16:9" checked><label class="seg" for="frame-169">16:9</label>
+            <input class="vis" type="radio" name="opt-frame" id="frame-219" value="21:9"><label class="seg" for="frame-219">21:9 ultrawide</label>
+          </div>
         </div>
         <div class="grid-2">
           <div class="field"><label class="fl" for="opt-res">Size</label>

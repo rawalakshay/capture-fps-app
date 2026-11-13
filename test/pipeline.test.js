@@ -44,3 +44,10 @@ test('compareGraph scales every pane to a shared edge and stacks them', () => {
   assert.ok(/\[0:v\]scale=1920:1080:flags=lanczos,drawtext=fontfile=.*IBMPlexSansCondensed-SemiBold\.ttf.*:textfile='a\.txt':expansion=none:fontsize=49.*x=\(w-text_w\)\/2:y=24\[p0\]/.test(l.graph), l.graph);
   assert.ok(l.graph.includes('[1:v]scale=1920:1080:flags=lanczos[p1]'));
 });
+
+test('assetsDir: in the packaged app ffmpeg gets the unpacked copy, not one inside app.asar', () => {
+  const { assetsDir } = require('../src/core/pipeline');
+  const res = path.join('C:', 'Program Files', 'Capture FPS', 'resources');
+  assert.equal(assetsDir(path.join(res, 'app.asar', 'src', 'core')), path.join(res, 'app.asar.unpacked', 'assets'));
+  assert.equal(assetsDir(path.join('F:', 'app', 'src', 'core')), path.join('F:', 'app', 'assets'), 'unchanged outside an asar');
+});

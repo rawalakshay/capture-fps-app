@@ -372,14 +372,14 @@ function perSecondFps(a) {
   return out;
 }
 
-/** True for frames that are part of play: not a menu, still or load screen. */
-const isPlay = (kind) => kind !== 'static' && kind !== 'loading';
+/** True for frames that are part of play: not a menu, still or load screen, nor a gap between clips on a timeline. */
+const isPlay = (kind) => kind !== 'static' && kind !== 'loading' && kind !== 'gap';
 
 /** The headline numbers for a set of frame times over `duration` seconds. */
-function frameStats(frameMs, duration, targetMs, refreshMs) {
+function frameStats(frameMs, duration, targetMs, refreshMs, count = frameMs.length) {
   const fts = frameMs.slice().sort((x, y) => x - y);
   const n = frameMs.length;
-  const avg = duration > 0 ? n / duration : 0.0;
+  const avg = duration > 0 ? count / duration : 0.0;
   const p99 = percentile(fts, 0.99), p999 = percentile(fts, 0.999);
   // A frame "misses" when it stays on screen at least one refresh longer
   // than the cap allows.
@@ -402,7 +402,12 @@ function summarise(a, info) {
   const playMs = a.frameMs.filter((_, i) => isPlay(a.kind[i]));
   const pausedS = (a.frameMs.reduce((s, ms, i) => s + (isPlay(a.kind[i]) ? 0 : ms), 0)) / 1000;
   const playS = Math.max(0, a.duration - pausedS);
-  const play = frameStats(playMs, playS, targetMs, refreshMs);
+  // A frame cut by a range edge (shiftAnalysis keeps its full length in shownMs) counts for the part shown,
+  // so a short range cannot average more frames than it has room for.
+  const playN = a.shownMs ? a.frameMs.reduce((s, ms, i) => s + (isPlay(a.kind[i]) ? Math.min(1, ms / (a.shownMs[i] || ms)) : 0), 0) : playMs.length;
+  // Lows and misses go by each frame's whole length: a 3 ms sliver of a cut frame is not a 3 ms frame.
+  const playFull = a.shownMs ? a.shownMs.filter((_, i) => isPlay(a.kind[i])) : playMs;
+  const play = frameStats(playFull, playS, targetMs, refreshMs, playN);
   const perSecond = perSecondFps(a);
   const finite = a.diffs.filter(Number.isFinite).sort((x, y) => x - y);
   const fpsVals = perSecond.map((r) => r[1]);

@@ -45,6 +45,8 @@ const THEME_NAMES = Object.freeze(Object.keys(THEMES));
 const HERO_CAP = 0.81; // Oswald cap height in em, for the two-tone split
 // libass sizes a font by ascent + descent (1.3 em for Plex), CSS by its em.
 const FS_PER_PX = 1.3, DESCENT = 0.275;
+// Inter (the A/B and timeline names) is 1.21 em; its 0.03 em smaller descent is left to DESCENT.
+const FS_PER_FONT = { 'Inter Medium': 1.21, 'Inter SemiBold': 1.21 };
 
 const PW = 380.0, PAD = 16.0;   // panel width and padding
 const IW = PW - 2 * PAD;        // inner width
@@ -59,7 +61,7 @@ const LG_H = 116, LG_PAD = 16, LG_TOP = 32, LG_CH = 72, LG_WIN = 7.5; // long gr
 const WATERMARK = '4aLse Benchmarks';     // bottom left of every video; opts.watermark overrides, '' removes it
 const TEAR_SHOW_S = 0.4;                  // a tear line stays on the video this long, fading out
 const END_CARD_S = 4;                     // the results card after the clip (opts.endCard)
-const HOLD_NAMES = { hitch: 'HITCH', static: 'STILL', loading: 'LOADING' };
+const HOLD_NAMES = { hitch: 'HITCH', static: 'STILL', loading: 'LOADING', gap: 'NO VIDEO' };
 
 // Layout in panel px: text baselines and box tops, as in the design.
 const LAYOUT = Object.freeze({
@@ -242,7 +244,7 @@ class Overlay {
   /** One styled text run; size in CSS px, spacing in em. The theme's shear applies to sans runs. */
   run(s, font, size, color, spacing = 0.0) {
     const fax = this.c.FAX && !MONO_FONTS.has(font) ? `\\fax${this.c.FAX}` : '';
-    return `{\\fn${font}\\fs${f1(this.px(size) * FS_PER_PX)}` +
+    return `{\\fn${font}\\fs${f1(this.px(size) * (FS_PER_FONT[font] || FS_PER_PX))}` +
       `\\fsp${this.px(size * spacing).toFixed(2)}${fax}\\c${assColor(color)}}${s}`;
   }
 
@@ -522,7 +524,7 @@ class Overlay {
     const stalled = elapsed >= this.m.stallMs;
     // What the frame on screen turns out to be; a hold the engine did not class is a plain stall.
     const k = cur >= 0 ? kind[cur] : 'ok';
-    const stallKind = !stalled ? null : k === 'static' || k === 'loading' ? 'paused' : 'hitch';
+    const stallKind = !stalled ? null : isPlay(k) ? 'hitch' : 'paused';
     const play = last.filter((_, j) => isPlay(lastKinds[j]));
     return {
       lastMs, elapsed, stalled, stallKind, kind: k, last, lastKinds, spanS,
@@ -892,21 +894,7 @@ class Overlay {
   writeTo(file, { at } = {}) {
     this.render();
     let lines = this.lines;
-    if (typeof at === 'number') { // one moment only, for a preview frame: its events, re-timed to the first second
-      const EVT = /^Dialogue: (\d+),([\d:.]+),([\d:.]+),/;
-      const secs = (s) => s.split(':').reduce((acc, v) => acc * 60 + Number(v), 0);
-      const MOVE = /\\move\(([\d.]+),([\d.]+),([\d.]+),([\d.]+),(\d+),(\d+)\)/;
-      lines = this.lines.filter((l) => { const m = EVT.exec(l); return secs(m[2]) <= at && at < secs(m[3]); })
-        .map((l) => {
-          const t0 = secs(EVT.exec(l)[2]);
-          // A moving event is frozen where it would be at `at`.
-          const frozen = l.replace(MOVE, (_, x1, y1, x2, y2, m1, m2) => {
-            const k = Math.min(1, Math.max(0, ((at - t0) * 1000 - m1) / (m2 - m1)));
-            return `\\pos(${f1(+x1 + (x2 - x1) * k)},${f1(+y1 + (y2 - y1) * k)})`;
-          });
-          return frozen.replace(EVT, 'Dialogue: $1,0:00:00.00,0:00:01.00,');
-        });
-    }
+    if (typeof at === 'number') lines = freezeAt(lines, at);
     const fd = fs.openSync(file, 'w');
     try {
       fs.writeSync(fd, this.head().join('\n') + '\n');
@@ -1079,11 +1067,35 @@ class NoneOverlay extends Overlay {
   drawFrame(tt) { if (this.lg) this.drawLongGraphTick(tt, this.frameAt(tt)); }
 }
 
-const STYLES = ['panel', 'strip', 'glass', 'none'];
+const STYLES = ['panel', 'strip', 'glass', 'none', 'bands'];
 const LOOKS = { panel: Overlay, strip: StripOverlay, glass: GlassOverlay, none: NoneOverlay };
 /** The overlay for opts.style (panel when unknown). */
 function createOverlay(a, size, title, rate, position, capture, opts = {}) {
-  return new (STYLES.includes(opts.style) ? LOOKS[opts.style] : Overlay)(a, size, title, rate, position, capture, opts);
+  // bands lives with the A/B export whose parts it shares; required here so the two files do not load each other at start
+  const Look = opts.style === 'bands' ? require('./compare-ab').BandsOverlay : STYLES.includes(opts.style) ? LOOKS[opts.style] : Overlay;
+  return new Look(a, size, title, rate, position, capture, opts);
+}
+
+/** One moment of an overlay, for a preview frame: the events on screen at `at`, re-timed to the first second. */
+function freezeAt(lines, at) {
+  const EVT = /^Dialogue: (\d+),([\d:.]+),([\d:.]+),/;
+  const secs = (s) => s.split(':').reduce((acc, v) => acc * 60 + Number(v), 0);
+  // Coordinates can be negative: the frame-time graph's events glide off its left edge.
+  const MOVE = /\\move\((-?[\d.]+),(-?[\d.]+),(-?[\d.]+),(-?[\d.]+),(\d+),(\d+)\)/;
+  const GROW = /\\clip\(([-\d.,]+)\)\\t\((\d+),(\d+),\\clip\(([-\d.,]+)\)\)/;
+  return lines.filter((l) => { const m = EVT.exec(l); return secs(m[2]) <= at && at < secs(m[3]); })
+    .map((l) => {
+      const t0 = secs(EVT.exec(l)[2]);
+      // A moving event is frozen where it would be at `at`.
+      const frozen = l.replace(MOVE, (_, x1, y1, x2, y2, m1, m2) => {
+        const k = Math.min(1, Math.max(0, ((at - t0) * 1000 - m1) / (m2 - m1)));
+        return `\\pos(${f1(+x1 + (x2 - x1) * k)},${f1(+y1 + (y2 - y1) * k)})`;
+      }).replace(GROW, (_, c0, m1, m2, c1) => { // a clip that widens over the clip (the bands look's played FPS line)
+        const k = Math.min(1, Math.max(0, ((at - t0) * 1000 - m1) / (m2 - m1))), p = c0.split(','), q = c1.split(',');
+        return `\\clip(${p.map((v, i) => Math.round(+v + (q[i] - v) * k)).join(',')})`;
+      });
+      return frozen.replace(EVT, 'Dialogue: $1,0:00:00.00,0:00:01.00,');
+    });
 }
 
 /** ffmpeg 'ass' filter, pointed at the bundled fonts. */
@@ -1105,4 +1117,5 @@ module.exports = {
   Overlay, StripOverlay, GlassOverlay, NoneOverlay, createOverlay, STYLES, END_CARD_S,
   assFilter, filterPath, assTime, assColor, tc, weightedFrames, POSITIONS, CAPTION_POSITIONS, LAYOUT,
   THEMES, THEME_NAMES, COLORS: THEMES.classic,
+  rectsPath, roundedPath, monoW, fmtMs, cleanText, freezeAt,
 };

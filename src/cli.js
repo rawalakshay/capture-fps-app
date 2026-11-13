@@ -8,11 +8,20 @@
 //                           [--resolution source|1080|1440|2160] [--upscaler lanczos|sharp|fsrcnnx]
 //                           [--no-target-pill] [--no-format-pill] [--watermark T | --no-watermark]
 //                           [--caption T] [--caption-position top-left|top-center|top-right|bottom-left|bottom-center|bottom-right]
-//                           [--style panel|strip|glass|none] [--long-graph] [--long-graph-opacity 0.86] [--end-card]
+//                           [--style panel|strip|glass|none|bands] [--frame 16:9|21:9] [--subtitle T]
+//                           [--long-graph] [--long-graph-opacity 0.86] [--end-card]
 //   node src/cli.js --compare a_fps.mp4 b_fps.mp4 [c.mp4] [--offsets 0,1.5] [--labels "PS5,PS5 Pro"]
 //                           [--layout h|v|grid] [--out FILE] [--encoder gpu|cpu] [--quality ...] [--cpu-decode]
+//   node src/cli.js --ab a.mp4 b.mp4 [--dirs a_fps,b_fps] [--offset S] [--frame 16:9|21:9] [--fit letterbox|crop|below]
+//                           [--size 1080|1440|2160] [--labels "PS5 Pro,PS5"] [--subtitle T] [--sound A|B]
+//                           [--no-end-card] [--end S] [--out FILE] [--encoder gpu|cpu] [--quality ...] [--upscaler ...]
+//     (both videos analysed first, e.g. with --no-video; --end caps the length, for a quick look)
+//   node src/cli.js --timeline project.json [--out FILE] [--end S]
+//     (an Edit & export project, see src/core/timeline.js; --end caps the export range's length)
 
-const { runJob, compareVideos, QUALITY, ENCODERS, RESOLUTIONS, UPSCALERS, LAYOUTS } = require('./core/pipeline');
+const fs = require('fs');
+const path = require('path');
+const { runJob, compareVideos, compareAB, renderTimeline, normaliseProject, defaultOutDir, QUALITY, ENCODERS, RESOLUTIONS, UPSCALERS, LAYOUTS, AB_SIZES, AB_FITS } = require('./core/pipeline');
 const { POSITIONS, CAPTION_POSITIONS, STYLES } = require('./core/overlay');
 const { gpuStatus } = require('./core/ffmpeg');
 const { parseTime } = require('./core/time');
@@ -53,6 +62,19 @@ function parseArgs(argv) {
     else if (a === '--long-graph') o.longGraph = true;
     else if (a === '--end-card') o.endCard = true;
     else if (a === '--compare') o.compare = true;
+    else if (a === '--ab') o.ab = true;
+    else if (a === '--timeline') {
+      o.timeline = next();
+      if (!o.timeline || o.timeline.startsWith('--')) throw new Error('usage: node src/cli.js --timeline <project.json> [--out FILE] [--end S]');
+    }
+    else if (a === '--dirs') o.dirs = next().split(',');
+    else if (a === '--offset') o.offset = num(next(), a);
+    else if (a === '--frame') o.frame = oneOf(next(), a, Object.keys(AB_SIZES));
+    else if (a === '--fit') o.fit = oneOf(next(), a, AB_FITS);
+    else if (a === '--size') o.size = oneOf(next(), a, ['1080', '1440', '2160']);
+    else if (a === '--sound') o.sound = oneOf(next(), a, ['A', 'B']);
+    else if (a === '--subtitle') o.subtitle = next();
+    else if (a === '--no-end-card') o.endCard = false;
     else if (a === '--offsets') o.offsets = next().split(',').map((v) => time(v, a));
     else if (a === '--labels') o.labels = next().split(',');
     else if (a === '--layout') o.layout = oneOf(next(), a, LAYOUTS);
@@ -68,7 +90,16 @@ function parseArgs(argv) {
     else o.videos.push(a);
   }
   o.video = o.videos[0];
-  if (o.compare) {
+  if (o.timeline) {
+    if (o.videos.length) throw new Error('usage: node src/cli.js --timeline <project.json> [--out FILE] [--end S]');
+    o.out = o.outDir;
+  } else if (o.ab) {
+    if (o.videos.length !== 2) throw new Error('usage: node src/cli.js --ab <video A> <video B> [options]');
+    o.inputs = o.videos.map((video, i) => ({
+      video, outDir: (o.dirs || [])[i] || defaultOutDir(video), title: o.labels ? o.labels[i] : undefined, subtitle: o.subtitle,
+    }));
+    o.out = o.outDir;
+  } else if (o.compare) {
     if (o.videos.length < 2) throw new Error('usage: node src/cli.js --compare <video> <video> [video...] [options]');
     o.inputs = o.videos.map((file, i) => ({ file, offset: (o.offsets || [])[i] || 0, label: o.labels ? o.labels[i] : undefined }));
     o.out = o.outDir;
@@ -78,7 +109,39 @@ function parseArgs(argv) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.timeline) {
+    const project = JSON.parse(fs.readFileSync(opts.timeline, 'utf8'));
+    // Relative clip paths are relative to the project file, not to where the command runs.
+    const base = path.dirname(path.resolve(opts.timeline));
+    for (const t of project.tracks || []) for (const c of (t && t.clips) || []) {
+      if (c && c.video) c.video = path.resolve(base, c.video);
+      if (c && c.outDir) c.outDir = path.resolve(base, c.outDir);
+    }
+    if (project.out) project.out = path.resolve(base, project.out);
+    if (!project.encoder) project.encoder = (await gpuStatus()).nvenc ? 'gpu' : 'cpu';
+    if (opts.end > 0) { // cap the range's length, for a quick look
+      const { range } = normaliseProject(project);
+      project.range = { in: range.in, out: Math.min(range.out, range.in + opts.end) };
+    }
+    const r = await renderTimeline(project, {
+      out: opts.out,
+      onProgress: ({ fraction }) => process.stderr.write(`\rtimeline ${(fraction * 100).toFixed(0).padStart(3)}%`),
+    });
+    process.stderr.write('\n');
+    console.log(`rendered     ${r.width}x${r.height} in ${r.seconds.toFixed(1)} s (${r.encoder === 'gpu' ? `NVENC ${r.codec.toUpperCase()}` : 'x264'})`);
+    console.log(`video        ${r.path}`);
+    return;
+  }
   if (!opts.encoder && opts.renderVideo) opts.encoder = (await gpuStatus()).nvenc ? 'gpu' : 'cpu';
+  if (opts.ab) {
+    const r = await compareAB(opts, {
+      onProgress: ({ fraction }) => process.stderr.write(`\rA/B      ${(fraction * 100).toFixed(0).padStart(3)}%`),
+    });
+    process.stderr.write('\n');
+    console.log(`compared     ${opts.frame || '16:9'} ${opts.fit || 'letterbox'}, ${r.width}x${r.height}, in ${r.seconds.toFixed(1)} s (${r.encoder === 'gpu' ? `NVENC ${r.codec.toUpperCase()}` : 'x264'})`);
+    console.log(`video        ${r.path}`);
+    return;
+  }
   if (opts.compare) {
     const r = await compareVideos(opts, {
       onProgress: ({ fraction }) => process.stderr.write(`\rcompare  ${(fraction * 100).toFixed(0).padStart(3)}%`),
