@@ -530,7 +530,7 @@ for (const r of document.querySelectorAll('input[name="opt-frame"]')) r.addEvent
 syncStyle();
 
 const THEME_NAME = { mono: 'Mono', aurora: 'Aurora', vice: 'Vice', classic: 'Classic' };
-const STYLE_NAME = { panel: 'Panel', strip: 'Strip', glass: 'Glass', none: 'No overlay', bands: 'Bands' };
+const STYLE_NAME = { panel: 'Panel', strip: 'Strip', glass: 'Glass', compact: 'Compact', none: 'No overlay', bands: 'Bands' };
 const RES_NAME = { source: 'source size', 1080: '1080p', 1440: '1440p', 2160: '4K' };
 
 // The pill chips show what they would draw; the section headers sum up their settings.
@@ -541,7 +541,7 @@ function syncSummaries() {
   const a = $('opt-start').value.trim(), b = $('opt-end').value.trim();
   $('sum-measure').textContent = `${a || b ? `${a || '0:00'}–${b || 'end'}` : 'whole'} · target ${$('opt-target').value || 'auto'} · threshold ${$('opt-threshold').value || 'auto'}`;
   const st = radioValue('opt-style');
-  $('sum-overlay').textContent = [THEME_NAME[radioValue('opt-theme')], STYLE_NAME[st], st === 'panel' || st === 'glass' ? radioValue('opt-pos') : st === 'bands' ? radioValue('opt-frame') : null].filter(Boolean).join(' · ');
+  $('sum-overlay').textContent = [THEME_NAME[radioValue('opt-theme')], STYLE_NAME[st], st === 'panel' || st === 'glass' || st === 'compact' ? radioValue('opt-pos') : st === 'bands' ? radioValue('opt-frame') : null].filter(Boolean).join(' · ');
   const res = st === 'bands' && radioValue('opt-frame') === '21:9' ? $('opt-res').selectedOptions[0].text : RES_NAME[$('opt-res').value];
   $('sum-export').textContent = `${radioValue('opt-enc') === 'gpu' ? 'NVENC' : 'x264'} · ${res} · ${$('opt-quality').value}`;
   syncGhosts();

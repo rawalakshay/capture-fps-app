@@ -8,7 +8,7 @@
 //                           [--resolution source|1080|1440|2160] [--upscaler lanczos|sharp|fsrcnnx]
 //                           [--no-target-pill] [--no-format-pill] [--watermark T | --no-watermark]
 //                           [--caption T] [--caption-position top-left|top-center|top-right|bottom-left|bottom-center|bottom-right]
-//                           [--style panel|strip|glass|none|bands] [--frame 16:9|21:9] [--subtitle T]
+//                           [--style panel|strip|glass|compact|none|bands] [--frame 16:9|21:9] [--subtitle T]
 //                           [--long-graph] [--long-graph-opacity 0.86] [--end-card]
 //   node src/cli.js --compare a_fps.mp4 b_fps.mp4 [c.mp4] [--offsets 0,1.5] [--labels "PS5,PS5 Pro"]
 //                           [--layout h|v|grid] [--out FILE] [--encoder gpu|cpu] [--quality ...] [--cpu-decode]

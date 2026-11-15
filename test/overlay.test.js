@@ -248,6 +248,34 @@ test('the strip and glass looks build cleanly and show the hero', () => {
   }
 });
 
+test('the compact look shows FPS, average, frame time and the graph, nothing else', () => {
+  // 1.5 s locked at 60, one 483 ms hitch, then 5.4 s locked again.
+  const a = analyse(rowsFromCounts([...Array(90).fill(1), 29, ...Array(324).fill(1)]), HZ, 0.4, 60);
+  for (const theme of THEME_NAMES) {
+    const ov = createOverlay(a, SIZE, 'Test clip', 30, 'left', SIZE, { style: 'compact', theme });
+    assert.equal(ov.W, 356);
+    const ass = ov.build(), events = parse(ass);
+    assert.ok(!/NaN|undefined|Infinity|null/.test(ass), `${theme}: no stray values`);
+    assert.ok(!/TARGET|TEST CLIP|1% LOW/.test(ass), `${theme}: no pills, title or lows`);
+    assert.ok(ass.includes('AVG 10 S') && ass.includes('}FRAME') && ass.includes('}FPS'), `${theme}: labels`);
+    const hero = active(events, 6.0).filter((e) => e.pos && Math.abs(e.pos[0] - (OX + 18)) < 0.11 && Math.abs(e.pos[1] - (OY + 45 + 0.275 * 40)) < 0.11);
+    assert.equal(hero.length, 1, `${theme}: one hero text`);
+    assert.equal(hero[0].plain, '60');
+    // Everything but the watermark stays inside the tile.
+    const inside = (x, y) => x >= OX - 0.11 && x <= OX + 356 + 0.11 && y >= OY - 0.11 && y <= OY + 114 + 0.11;
+    for (const e of active(events, 6.0).filter((x) => !x.plain.includes('4aLse'))) {
+      if (e.drawing) assert.ok(e.rects.every((r) => inside(r.x, r.y) && inside(r.x + r.w, r.y2)), `${theme}: shape inside`);
+      else assert.ok(inside(...e.pos), `${theme}: ${e.plain} inside`);
+    }
+  }
+  const events = parse(createOverlay(a, SIZE, 'Test clip', 30, 'left', SIZE, { style: 'compact' }).build());
+  // While the hitch is on screen FRAME reads HITCH in red; after it the graph labels the 483 ms bar.
+  const during = active(events, 1.5 + 0.3);
+  assert.ok(during.some((e) => e.plain === 'HITCH' && e.colors.includes(RED)), 'hitch badge');
+  assert.ok(!during.some((e) => e.plain === 'FRAME'), 'FRAME gives way to the badge');
+  assert.ok(active(events, 3.0).some((e) => e.plain === '483' && e.colors.includes(RED)), 'overflow label on the graph');
+});
+
 test('the long graph scrolls one moving event per frame', () => {
   const a = analyse(rowsFromCounts([...Array(30).fill(2), 29, ...Array(324).fill(2)]), HZ, 0.4, 30);
   const ass = new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE,

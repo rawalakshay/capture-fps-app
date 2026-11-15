@@ -1059,6 +1059,55 @@ class GlassOverlay extends Overlay {
   }
 }
 
+// ---- look E: compact tile, FPS / AVG / FRAME over a frame-time graph ----
+
+// Row 1 centres on y 31; the graph fills row 2. Columns: hero, divider, AVG, FRAME (fits "1250.0 ms").
+const COMPACT = Object.freeze({ W: 356, H: 114, R: 14, X: 18, div: 144, avg: 159, frame: 245, LABEL_BASE: 24, VALUE_BASE: 48,
+  chart: { x: 18, top: 62, w: 320, h: 38 } });
+
+class CompactOverlay extends Overlay {
+  static W = COMPACT.W;
+  static H = COMPACT.H;
+
+  drawChrome(D) {
+    const C = COMPACT, c = this.c, px = (v) => this.px(v), { ox, oy } = this;
+    this.shape(0, D, roundedPath(px(ox), px(oy), px(C.W), px(C.H), px(C.R)), c.PANEL, 0.08, 0, 0xFFFFFF, 0.84);
+    // The theme accents the Panel draws, sized to the tile.
+    if (c.ACCENT === 'left') this.shape(0, D, roundedPath(px(ox), px(oy + 12), px(3), px(C.H - 24), px(1.5)), c.BLUE, 1.0, 1);
+    else if (c.ACCENT === 'top') {
+      const p = roundedPath(px(ox + 1), px(oy + 1), px(C.W - 2), px(C.H - 2), px(C.R - 1));
+      const clip = (x1, x2) => `\\clip(${Math.round(px(x1))},${Math.round(px(oy))},${Math.round(px(x2))},${Math.round(px(oy + 4))})`;
+      this.emit(1, 0, D, this.shapeBody(p, c.BLUE, 1.0, null, 0, clip(ox, ox + C.W / 2)));
+      this.emit(1, 0, D, this.shapeBody(p, c.AMBER, 1.0, null, 0, clip(ox + C.W / 2, ox + C.W)));
+    }
+    this.rects(0, D, [[C.div, 13, 1, 36]], c.LINE, c.LINE_A, 1);
+    this.text(0, D, C.avg, C.LABEL_BASE, this.run('AVG 10 S', c.SANS_MED, 11, c.FOOT, 0.06), 11);
+    this.drawExtras(D);
+  }
+
+  drawNumbers(tq, tEnd) {
+    const n = this.numbersAt(tq), C = COMPACT, { target } = this.m;
+    const heroS = fmt0(n.hero);
+    this.text(tq, tEnd, C.X, 45, this.run(heroS, this.c.HERO || this.c.MONO_SEMI, 40, n.hero == null ? this.c.TEXT : this.levelColor(n.hero, target), -0.03), 40);
+    const lx = C.X + monoW(heroS, 40, -0.03) + 6;
+    this.slot('heroFps', 3, tq, this.textBody(lx, 31, this.run('FPS', this.c.SANS_SEMI, 13, this.c.LABEL, 0.06), 13));
+    this.slot('heroSub', 3, tq, this.textBody(lx, 45, this.run('0.5 S', this.c.SANS_MED, 11, this.c.FOOT, 0.06), 11));
+    this.text(tq, tEnd, C.avg, C.VALUE_BASE, this.run(fmt1(n.avg), this.c.MONO_SEMI, 22, n.avg == null ? this.c.TEXT : this.levelColor(n.avg, target)), 22);
+  }
+
+  drawFrame(tt, tEnd) {
+    const f = this.frameAt(tt), C = COMPACT, { targetMs } = this.m;
+    // FRAME becomes the hold's name while a frame is held, as the Strip's badge.
+    const label = f.stalled ? this.run(HOLD_NAMES[f.kind] || 'STALL', this.c.SANS_SEMI, 11, f.stallKind === 'hitch' ? this.c.RED : this.c.DIM, 0.06)
+      : this.run('FRAME', this.c.SANS_MED, 11, this.c.FOOT, 0.06);
+    this.slot('frameLabel', 3, tt, this.textBody(C.frame, C.LABEL_BASE, label, 11));
+    this.slot('last', 3, tt, this.textBody(C.frame, C.VALUE_BASE,
+      this.run(fmt1(f.lastMs), this.c.MONO_SEMI, 22, f.lastMs == null ? this.c.TEXT : this.ftTextColor(f.lastMs, targetMs)) + this.run(' ms', this.c.MONO_SEMI, 11, this.c.DIM), 22));
+    this.ftChart(tt, f, { key: 'cft', ...C.chart, slots: FT_SHOW + 1 });
+    this.drawLongGraphTick(tt, f);
+  }
+}
+
 // ---- look D: no overlay, only the extras (watermark, caption, long graph) ----
 
 class NoneOverlay extends Overlay {
@@ -1067,8 +1116,8 @@ class NoneOverlay extends Overlay {
   drawFrame(tt) { if (this.lg) this.drawLongGraphTick(tt, this.frameAt(tt)); }
 }
 
-const STYLES = ['panel', 'strip', 'glass', 'none', 'bands'];
-const LOOKS = { panel: Overlay, strip: StripOverlay, glass: GlassOverlay, none: NoneOverlay };
+const STYLES = ['panel', 'strip', 'glass', 'compact', 'none', 'bands'];
+const LOOKS = { panel: Overlay, strip: StripOverlay, glass: GlassOverlay, compact: CompactOverlay, none: NoneOverlay };
 /** The overlay for opts.style (panel when unknown). */
 function createOverlay(a, size, title, rate, position, capture, opts = {}) {
   // bands lives with the A/B export whose parts it shares; required here so the two files do not load each other at start
@@ -1114,7 +1163,7 @@ const POSITIONS = ['left', 'center', 'right'];
 const CAPTION_POSITIONS = ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'];
 
 module.exports = {
-  Overlay, StripOverlay, GlassOverlay, NoneOverlay, createOverlay, STYLES, END_CARD_S,
+  Overlay, StripOverlay, GlassOverlay, CompactOverlay, NoneOverlay, createOverlay, STYLES, END_CARD_S,
   assFilter, filterPath, assTime, assColor, tc, weightedFrames, POSITIONS, CAPTION_POSITIONS, LAYOUT,
   THEMES, THEME_NAMES, COLORS: THEMES.classic,
   rectsPath, roundedPath, monoW, fmtMs, cleanText, freezeAt,
