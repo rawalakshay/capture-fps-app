@@ -243,12 +243,21 @@
               <span class="fl" id="abx-size-label">Size</span>
               <div class="segbar segbar-in segbar-grid mono" role="radiogroup" aria-labelledby="abx-size-label" id="abx-sizes"></div>
             </div>
-            <div class="field" id="abx-upscaler-row"><label class="fl" for="abx-upscaler">Upscaler</label>
-              <select id="abx-upscaler" class="input sel">
-                <option value="lanczos" selected>Lanczos</option>
-                <option value="sharp">Lanczos + sharpen</option>
-                <option value="fsrcnnx">FSRCNNX on the GPU</option>
-              </select>
+            <div class="field">
+              <div class="tog"><input type="checkbox" id="abx-safe" class="switch" checked aria-describedby="abx-safe-hint"><label for="abx-safe">Keep YouTube's controls clear</label></div>
+              <span class="hint" id="abx-safe-hint">Nothing is drawn in the bottom 8 %, where the player bar sits. Turn off for full-screen players or local files: the frame-time graph and numbers move down to the edge.</span>
+            </div>
+            <div class="grid-2">
+              <div class="field"><label class="fl" for="abx-enc">Encoder</label>
+                <select id="abx-enc" class="input sel"><option value="gpu">GPU (NVENC)</option><option value="cpu">CPU (x264)</option></select>
+              </div>
+              <div class="field" id="abx-upscaler-row"><label class="fl" for="abx-upscaler">Upscaler</label>
+                <select id="abx-upscaler" class="input sel">
+                  <option value="lanczos" selected>Lanczos</option>
+                  <option value="sharp">Lanczos + sharpen</option>
+                  <option value="fsrcnnx">FSRCNNX on the GPU</option>
+                </select>
+              </div>
             </div>
             <div class="ab-menu-sum">
               <span class="mono" id="abx-sum"></span>
@@ -284,10 +293,22 @@
               <span class="fl" id="edx-size-label">Size</span>
               <div class="segbar segbar-in segbar-grid mono" role="radiogroup" aria-labelledby="edx-size-label" id="edx-sizes"></div>
             </div>
+            <div class="field">
+              <div class="tog"><input type="checkbox" id="edx-safe" class="switch" checked aria-describedby="edx-safe-hint"><label for="edx-safe">Keep YouTube's controls clear</label></div>
+              <span class="hint" id="edx-safe-hint">Nothing is drawn in the bottom 8 %, where the player bar sits. Turn off for full-screen players or local files: the frame-time graph and numbers move down to the edge.</span>
+            </div>
+            <div class="grid-2">
+              <div class="field"><label class="fl" for="edx-enc">Encoder</label>
+                <select id="edx-enc" class="input sel"><option value="gpu">GPU (NVENC)</option><option value="cpu">CPU (x264)</option></select>
+              </div>
+              <div class="field"><label class="fl" for="edx-upscaler">Upscaler</label>
+                <select id="edx-upscaler" class="input sel"><option value="lanczos">Lanczos</option><option value="sharp">Lanczos + sharpen</option><option value="fsrcnnx">FSRCNNX on the GPU</option></select>
+              </div>
+            </div>
             <div class="ab-menu-sum">
               <span class="mono" id="edx-sum"></span>
               <span class="hint" id="edx-hevc" hidden>Above 4096 px wide the GPU encoder switches to HEVC; the CPU encoder stays H.264.</span>
-              <span class="hint">Encoder and quality come from a recording's Export options. The 5 s results card comes last.</span>
+              <span class="hint">Encoder and Upscaler are the recording's Export options, shared; quality comes from there too. The 5 s results card comes last.</span>
             </div>
           </div>
         </details>

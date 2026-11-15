@@ -442,12 +442,13 @@ function compareABGraph(p) {
  * live FPS, hitches and frame times, and an end card comparing them.
  * opts: { inputs: [{ video, outDir, title?, subtitle?, start? (the analysis's In point, s) }, same for B], offset = 0, frame = '16:9' | '21:9',
  *         fit = 'letterbox' | 'crop' | 'below' (21:9 only), size = '1080' | '1440' | '2160', encoder,
- *         quality, upscaler, sound = 'A' | 'B', endCard = true, watermark?, out?, end? (cap the length, s), hwDecode? }
+ *         quality, upscaler, sound = 'A' | 'B', endCard = true, safe = true (bottom 8 % kept clear), watermark?, out?, end? (cap the length, s), hwDecode? }
  * onProgress({ phase: 'compare', fraction })
  */
 async function compareAB(opts, { onProgress = () => {}, signal } = {}) {
   const inputs = opts.inputs || [];
   if (inputs.length !== 2) throw new Error('A/B compare needs two analysed videos');
+  if (opts.safe !== undefined && typeof opts.safe !== 'boolean') throw new Error(`Safe area must be true or false, not ${JSON.stringify(opts.safe)}`);
   for (const i of inputs) if (!i || !i.video || !fs.existsSync(i.video)) throw new Error(`${(i && i.video) || 'A video'} not found`);
   const ans = await Promise.all(inputs.map((i) => loadAnalysis(i.outDir, i.video)));
   const encoder = ENCODERS.includes(opts.encoder) ? opts.encoder : 'gpu';
@@ -483,7 +484,7 @@ async function compareAB(opts, { onProgress = () => {}, signal } = {}) {
         title: inputs[i].title || stems[i], subtitle: inputs[i].subtitle || '',
       })),
       size: { width: g.width, height: g.height }, frame: opts.frame === '21:9' ? '21:9' : '16:9', fit: opts.fit || 'letterbox',
-      span: g.span, endCard, watermark: opts.watermark, ycbcr: 'TV.709',
+      span: g.span, endCard, watermark: opts.watermark, ycbcr: 'TV.709', safe: opts.safe !== false,
     }).writeTo(assFile);
     if (signal && signal.aborted) throw abortError();
     const total = g.span + (endCard ? AB_END_CARD_S : 0);
@@ -623,7 +624,7 @@ function timelineOverlay(p, size, { window } = {}) {
     const a = trackAnalysis(t, reads, p.range);
     return { a, summary: summarise(a, reads[0].summary.capture), title: t.title, subtitle: t.subtitle };
   });
-  return abOverlay({ panes, size, frame: p.frame, fit: p.fit, span: p.range.out - p.range.in, endCard: p.endCard, watermark: p.watermark, window, ycbcr: 'TV.709' });
+  return abOverlay({ panes, size, frame: p.frame, fit: p.fit, span: p.range.out - p.range.in, endCard: p.endCard, watermark: p.watermark, window, ycbcr: 'TV.709', safe: p.safe });
 }
 
 const probed = new Map(); // video path -> probe, for exact frames while scrubbing

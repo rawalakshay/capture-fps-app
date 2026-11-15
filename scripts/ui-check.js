@@ -520,9 +520,34 @@ async function step(name, fn) {
   await step('edit-layout-menu', async () => {
     await evalJs('document.getElementById("ed-layout-menu").open = true');
     await sleep(300);
-    report.editLayout = await evalJs('JSON.stringify({ fits: [...document.querySelectorAll("#edx-fits label")].map((l) => l.textContent), sizes: [...document.querySelectorAll("#edx-sizes label")].map((l) => l.textContent), frame169: document.getElementById("edx-frame-169").disabled, sum: document.getElementById("edx-sum").textContent })');
+    report.editLayout = await evalJs('JSON.stringify({ fits: [...document.querySelectorAll("#edx-fits label")].map((l) => l.textContent), sizes: [...document.querySelectorAll("#edx-sizes label")].map((l) => l.textContent), frame169: document.getElementById("edx-frame-169").disabled, sum: document.getElementById("edx-sum").textContent, ' +
+      'safe: document.getElementById("edx-safe").checked, enc: [...document.getElementById("edx-enc").options].map((o) => o.value), up: [...document.getElementById("edx-upscaler").options].map((o) => o.value), encNow: [document.getElementById("edx-enc").value, radioValue("opt-enc")], upNow: [document.getElementById("edx-upscaler").value, document.getElementById("opt-upscaler").value] })');
     await shotAllSizes('edit-layout-menu');
     await evalJs('document.getElementById("ed-layout-menu").open = false');
+    const L = JSON.parse(report.editLayout);
+    if (!L.safe || L.enc.join() !== 'gpu,cpu' || L.up.join() !== 'lanczos,sharp,fsrcnnx' || L.encNow[0] !== L.encNow[1] || L.upNow[0] !== L.upNow[1]) throw new Error(`Layout menu: ${report.editLayout}`);
+  });
+
+  // Safe area off: the frame-time block moves down by 58 - m board px (m: the layout's edge margin), the guide goes.
+  await step('edit-safe-off', async () => {
+    // The frame-time block's bottom in board px, as drawn and as the layout's ft says it should be.
+    const FT = `(() => { const pn = ed.board.panes[0], f = document.querySelector("#ed-board .pv-ft");
+      if (!pn.L || !f) return { drawn: NaN };
+      const t = pn.L.ft, s = ed.scale, top = document.getElementById("ed-board").getBoundingClientRect().top, lb = ed.board.W / ed.board.H > 2 ? 20 : 18;
+      return { drawn: (f.getBoundingClientRect().bottom - top) / s, want: t.y + 1.3 * lb + (t.gap ?? 6) + t.graphH, panel: t.panel ? (document.querySelector("#ed-board .pv-ftpanel").getBoundingClientRect().bottom - top) / s : null,
+        m: ed.p.fit === "crop" && ed.p.frame === "21:9" ? 24 : 20, fit: ed.p.fit, guide: !document.getElementById("ed-safe-strip").hidden, safe: edProject().safe }; })()`;
+    const on = JSON.parse(await evalJs(`JSON.stringify(${FT})`));
+    await evalJs('document.getElementById("edx-safe").click()');
+    await waitFor(`${FT}.drawn > ${on.drawn + 1}`, 20000, 200);
+    const off = JSON.parse(await evalJs(`JSON.stringify(${FT})`));
+    report.editSafe = { on, off };
+    if (!on.guide || on.safe !== true) throw new Error(`safe area on: ${JSON.stringify(on)}`);
+    if (off.guide || off.safe !== false) throw new Error(`safe area off still shows the guide or exports safe: ${JSON.stringify(off)}`);
+    if (Math.abs(off.drawn - off.want) > 2 || Math.abs(off.drawn - on.drawn - (58 - off.m)) > 2) throw new Error(`the frame-time block did not move down by ${58 - off.m}: ${JSON.stringify(report.editSafe)}`);
+    if (off.panel !== null && Math.abs(off.panel - (720 - off.m)) > 2) throw new Error(`the frame-time panel ends ${720 - off.panel} from the bottom, not ${off.m}`);
+    await shotAllSizes('edit-safe-off');
+    await evalJs('edUndo(-1)');
+    await waitFor(`!document.getElementById("ed-safe-strip").hidden && ${FT}.drawn < ${off.drawn - 1}`, 20000, 200);
   });
 
   await step('edit-track-menu', async () => {
@@ -569,8 +594,12 @@ async function step(name, fn) {
     // A clip switch (A1 -> A2, C's gap -> C2) may jolt a track for a moment; it must settle, and mostly be in sync.
     const play = samples.filter((s) => s.playing); // stopped at the range's end, a paused video has no drift to speak of
     const all = play.slice(3).flatMap((s) => s.drift.filter((d) => d !== null)).map(Math.abs).sort((x, y) => x - y);
-    const last = play.slice(-3).flatMap((s) => s.drift.filter((d) => d !== null));
-    if (all[Math.floor(all.length / 2)] > 0.034 || last.some((d) => Math.abs(d) > 0.034)) throw new Error(`tracks out of sync: ${JSON.stringify(samples.map((s) => s.drift))}`);
+    // Settled is each track's median over the last 5 samples: one read of a video's currentTime can be a frame off
+    // while it plays in step (a run read -44 ms between -5 and -31 ms samples).
+    const med = (xs) => xs.slice().sort((x, y) => x - y)[xs.length >> 1];
+    const last = (play[0] ? play[0].drift : []).map((_, ti) => play.slice(-5).map((s) => s.drift[ti]).filter((d) => d !== null).map(Math.abs))
+      .filter((xs) => xs.length).map(med);
+    if (all[Math.floor(all.length / 2)] > 0.034 || last.some((d) => d > 0.034)) throw new Error(`tracks out of sync: ${JSON.stringify(samples.map((s) => s.drift))}`);
   });
 
   await step('edit drag, trim, split, undo', async () => {

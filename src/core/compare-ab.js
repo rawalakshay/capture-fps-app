@@ -1,8 +1,8 @@
 'use strict';
 // A/B: two saved analyses side by side in one video, and the single-video
 // 'bands' look built from the same parts. Laid out in px of the design's
-// 720-high board and scaled to the output height. Nothing is drawn in the
-// bottom 8 % of the frame, where YouTube's player controls sit.
+// 720-high board and scaled to the output height. With the safe area on (the
+// default) nothing is drawn in the bottom 8 % of the frame, where YouTube's player controls sit.
 
 const fs = require('fs');
 const path = require('path');
@@ -185,6 +185,16 @@ function mergeHolds({ starts, frameMs, kind }) {
   return spans;
 }
 
+/** Per frame, whether the frame-time graph leaves it out: stills, loads and anything inside a merged span of them. */
+function hiddenFrames({ starts, kind }, spans) {
+  const hidden = [];
+  for (let i = 0, j = 0; i < starts.length; i++) {
+    while (j < spans.length && spans[j].t1 <= starts[i] + 1e-9) j++;
+    hidden.push(!isPlay(kind[i]) || (j < spans.length && starts[i] >= spans[j].t0 - 1e-9));
+  }
+  return hidden;
+}
+
 /** What the window draws for one side: hitches, stills and loads as the export labels them, play FPS
  * and the worst play frame of each second. */
 function abData(outDir, read = readAnalysis(outDir)) {
@@ -203,10 +213,19 @@ function abData(outDir, read = readAnalysis(outDir)) {
     for (let sec = Math.floor(s); sec < ends[i] && sec < held.length; sec++) held[sec] += Math.min(ends[i], sec + 1) - Math.max(s, sec);
   });
   const playFps = perSecond.map(([sec], i) => [sec, held[i] <= 0.5 ? r(weightedFrames(a.starts, ends, sec, sec + 1, Infinity, 0, a.kind) / (1 - held[i]), 2) : null]);
+  // Every frame's time as [start s, ms] change points, a run per 0.1 ms step (frames read back within 0.05 ms), then [end, null].
+  // Frames ftMoving hides (stills and loads of any length) are null, so the window breaks and dims where the export does.
+  // shortcut: an unlocked 3 h capture is up to ~650k runs (~13 MB over IPC); bin them per refresh if that gets slow.
+  const frameRuns = [], spans = mergeHolds(a), hidden = hiddenFrames(a, spans);
+  a.starts.forEach((s, i) => {
+    const ms = hidden[i] ? null : r(a.frameMs[i], 1);
+    if (!frameRuns.length || frameRuns[frameRuns.length - 1][1] !== ms) frameRuns.push([r(s, 4), ms]);
+  });
+  frameRuns.push([r(a.duration, 4), null]);
   return {
-    summary, perSecond, playFps,
+    summary, perSecond, playFps, frameRuns,
     hitches: a.holds.filter((h) => h.kind === 'hitch').map((h) => [r(h.start, 3), r(h.ms, 1)]),
-    paused: mergeHolds(a).filter((h) => h.t1 - h.t0 >= HOLD_SHOW_S).map((h) => [r(h.t0, 3), r((h.t1 - h.t0) * 1000, 1), h.kind]),
+    paused: spans.filter((h) => h.t1 - h.t0 >= HOLD_SHOW_S).map((h) => [r(h.t0, 3), r((h.t1 - h.t0) * 1000, 1), h.kind]),
     ftMax: perSecond.map(([sec], i) => [sec, worst.has(sec) && held[i] <= 0.5 ? r(worst.get(sec), 1) : null]), // breaks where playFps does
   };
 }
@@ -475,7 +494,7 @@ class Board extends Overlay {
    * Spikes over the scale are capped with their value; stills and loads are dimmed, labelled bands. */
   ftMoving(D, { x, y, w, h, head }, color) {
     const { targetMs } = this.m, scale = 4 * targetMs, speed = w / FT_WIN, lw = 3, S = this.S, c = this.c;
-    const { starts, kind } = this.a, frameMs = this.a.shownMs || this.a.frameMs, ends = this.ends, xR = x + w, P = (v) => this.px(v);
+    const { starts } = this.a, frameMs = this.a.shownMs || this.a.frameMs, ends = this.ends, xR = x + w, P = (v) => this.px(v);
     const clip = `\\clip(${Math.floor(this.X(x))},${Math.floor(P(y - lw))},${Math.ceil(this.X(xR))},${Math.ceil(P(y + h + lw))})`;
     const yOf = (ms) => y + h * (1 - Math.min(1, ms / scale));
     const fill = (col, alpha = 1) => `\\p1\\c${assColor(col)}${alpha < 1 ? `\\1a&H${hex2(Math.round((1 - alpha) * 255))}&` : ''}`;
@@ -487,11 +506,7 @@ class Board extends Overlay {
       }
     };
     // Stills and loads: one dimmed band per span, the spans the FPS graph uses; frames inside one are not drawn.
-    const spans = this.holdSpans(0), hidden = [];
-    for (let i = 0, j = 0; i < starts.length; i++) {
-      while (j < spans.length && spans[j].t1 <= starts[i] + 1e-9) j++;
-      hidden.push(!isPlay(kind[i]) || (j < spans.length && starts[i] >= spans[j].t0 - 1e-9));
-    }
+    const spans = this.holdSpans(0), hidden = hiddenFrames(this.a, spans);
     for (const s of spans) {
       moving(1, s.t0, s.t1 - s.t0 + FT_WIN, xR, y, fill(WHITE, 0.14), `${rectsPath([[0, 0, P((s.t1 - s.t0) * speed), P(h)]])}{\\p0}`);
     }
@@ -660,8 +675,18 @@ class Board extends Overlay {
   }
 }
 
-/** Where each part of one video's column sits, in board px from the column's left edge. */
-function columnLayout(frame, fit, side, CW) {
+/** Where each part of one video's column sits, in board px from the column's left edge. safe: keep the bottom
+ * 58 px (8 %) clear; off, what is anchored to the bottom moves down to the layout's own edge margin. */
+function columnLayout(frame, fit, side, CW, safe = true) {
+  const L = safeColumn(frame, fit, side, CW);
+  if (safe) return L;
+  const dy = 58 - (fit === 'crop' && frame === '21:9' ? 24 : 20), t = L.ft;
+  const ft = { ...t, y: t.y + dy, ...(t.panel && { panel: [t.panel[0] + dy, t.panel[1]] }) };
+  // In the band layouts the live box and HITCH tag sit on the video, not at the bottom: they stay.
+  return fit === 'crop' ? { ...L, ft, live: { ...L.live, bottom: L.live.bottom + dy }, hitchBottom: L.hitchBottom + dy } : { ...L, ft };
+}
+
+function safeColumn(frame, fit, side, CW) {
   if (fit === 'third') { // 21:9, three videos: name band 0-72, video 72-552, frame times below (Export-21x9-3up)
     return {
       video: [72, 480], name: { kind: 'band', x: 16, right: CW - 16 },
@@ -716,7 +741,7 @@ class ABPane extends Board {
       this.ox = r.x / this.k;
       CW = r.w / this.k;
     } else this.ox = side * CW;
-    const L = columnLayout(o.frame, o.fit, side, CW);
+    const L = columnLayout(o.frame, o.fit, side, CW, o.safe);
     this.drawName(D, L, side);
     const f = L.fps, pad = f.pad || (f.panel ? [10, 12] : [0, 0]), fpsHead = f.target ? `FPS · TARGET ${this.m.target}` : 'FPS';
     if (f.panel) this.box(0, D, f.x, f.y, f.w, 2 * pad[0] + 1.3 * S.label + 4 + f.graphH);
@@ -890,7 +915,7 @@ function bandsPane(height, frame) {
 
 /**
  * The A/B overlay. p: { panes: [{ a, summary, title, subtitle }] (A, B and for fit 'third' C, already on
- * the output's clock: shiftAnalysis or trackAnalysis), size: { width, height }, frame, fit, span, endCard, watermark?, ycbcr? }.
+ * the output's clock: shiftAnalysis or trackAnalysis), size: { width, height }, frame, fit, span, endCard, watermark?, ycbcr?, safe = true }.
  * Returns { build(), writeTo(file, { at }) }; `at` writes only that moment, re-timed to 0 (a single frame).
  */
 function abOverlay(p) {
@@ -906,7 +931,7 @@ function abOverlay(p) {
     }
     const x = p.panes[k];
     const pane = new ABPane(x.a, p.size, x.title || LETTERS[k], 30, 'left', null,
-      { side: k, frame: p.frame, fit: p.fit, subtitle: x.subtitle, subtitles: p.panes.map((q) => q.subtitle), summary: x.summary, watermark: k === n - 1 ? wm : '', wmText: wm, window: p.window });
+      { side: k, frame: p.frame, fit: p.fit, subtitle: x.subtitle, subtitles: p.panes.map((q) => q.subtitle), summary: x.summary, watermark: k === n - 1 ? wm : '', wmText: wm, window: p.window, safe: p.safe });
     pane.render();
     return pane.lines;
   };
@@ -945,5 +970,5 @@ function liveFps(a) {
 
 module.exports = {
   loadAnalysis, analysisStart, liveFps, readAnalysis, abData, shiftAnalysis, overlapSummary, verdict, verdictN, abRows, rowsN, pacingPct, abOverlay,
-  bandsPane, BandsOverlay, AB_END_CARD_S, AB_SIZES, FPS_TOP, FPS_HALF, FT_WIN, videoRects, thirds,
+  bandsPane, BandsOverlay, AB_END_CARD_S, AB_SIZES, FPS_TOP, FPS_HALF, FT_WIN, videoRects, thirds, columnLayout,
 };

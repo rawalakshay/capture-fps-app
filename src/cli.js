@@ -14,10 +14,11 @@
 //                           [--layout h|v|grid] [--out FILE] [--encoder gpu|cpu] [--quality ...] [--cpu-decode]
 //   node src/cli.js --ab a.mp4 b.mp4 [--dirs a_fps,b_fps] [--offset S] [--frame 16:9|21:9] [--fit letterbox|crop|below]
 //                           [--size 1080|1440|2160] [--labels "PS5 Pro,PS5"] [--subtitle T] [--sound A|B]
-//                           [--no-end-card] [--end S] [--out FILE] [--encoder gpu|cpu] [--quality ...] [--upscaler ...]
+//                           [--no-end-card] [--no-safe-area] [--end S] [--out FILE] [--encoder gpu|cpu] [--quality ...] [--upscaler ...]
 //     (both videos analysed first, e.g. with --no-video; --end caps the length, for a quick look)
-//   node src/cli.js --timeline project.json [--out FILE] [--end S]
-//     (an Edit & export project, see src/core/timeline.js; --end caps the export range's length)
+//   node src/cli.js --timeline project.json [--out FILE] [--end S] [--no-safe-area]
+//     (an Edit & export project, see src/core/timeline.js; --end caps the export range's length;
+//      --no-safe-area draws into the bottom 8 % that is kept clear for YouTube's controls)
 
 const fs = require('fs');
 const path = require('path');
@@ -75,6 +76,7 @@ function parseArgs(argv) {
     else if (a === '--sound') o.sound = oneOf(next(), a, ['A', 'B']);
     else if (a === '--subtitle') o.subtitle = next();
     else if (a === '--no-end-card') o.endCard = false;
+    else if (a === '--no-safe-area') o.safe = false;
     else if (a === '--offsets') o.offsets = next().split(',').map((v) => time(v, a));
     else if (a === '--labels') o.labels = next().split(',');
     else if (a === '--layout') o.layout = oneOf(next(), a, LAYOUTS);
@@ -119,6 +121,7 @@ async function main() {
     }
     if (project.out) project.out = path.resolve(base, project.out);
     if (!project.encoder) project.encoder = (await gpuStatus()).nvenc ? 'gpu' : 'cpu';
+    if (opts.safe === false) project.safe = false;
     if (opts.end > 0) { // cap the range's length, for a quick look
       const { range } = normaliseProject(project);
       project.range = { in: range.in, out: Math.min(range.out, range.in + opts.end) };

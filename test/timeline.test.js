@@ -83,6 +83,8 @@ test('normaliseProject says plainly what is wrong', () => {
   bad({ tracks: [{ clips: Array.from({ length: 65 }, (_, i) => clip(LOCKED, 0, 0.1, i * 0.1)) }, { clips: [clip(EVENT, 0, 6, 0)] }] }, /up to 64 clips; this one has 66/);
   bad({ tracks: [{ clips: [clip(LOCKED, 3, 2, 0)] }, { clips: [] }] }, /Out \(0:02\.00\) must be after In/);
   assert.doesNotThrow(() => tl.normaliseProject({ tracks: [{ clips: [clip(LATE, 21, 25, 0)] }, { clips: [clip(EVENT, 0, 6, 0)] }] }));
+  bad(two({ safe: 'off' }), /Safe area must be true or false, not "off"/);
+  assert.deepEqual([tl.normaliseProject(two()).safe, tl.normaliseProject(two({ safe: false })).safe], [true, false]);
 });
 
 test('trackAnalysis: trims and offsets, gaps at the start, middle and end, the range cut', () => {
@@ -155,6 +157,20 @@ test('layoutBoxes: three even columns that fill 2560 with 2 px seams, the crop w
   const fit = tl.layoutBoxes(tl.normaliseProject(two()));
   assert.deepEqual([fit.mode, fit.cropping, fit.clips[0][0].crop], ['fit', false, { x: 0, y: 0, w: 1, h: 1 }]);
   assert.deepEqual(fit.videos[0], { x: 0, y: 270, w: 960, h: 540 }, 'the A/B letterbox pane');
+});
+
+test('layoutBoxes: each pane carries the overlay layout the export draws, safe area on and off', () => {
+  for (const safe of [true, false]) {
+    for (const p of [two({ safe }), two({ fit: 'crop', safe }), two({ frame: '21:9', fit: 'crop', safe }), two({ frame: '21:9', fit: 'below', safe }), three({ safe })]) {
+      const lb = tl.layoutBoxes(tl.normaliseProject(p));
+      lb.panes.forEach((pane, i) => assert.deepEqual(pane.overlay, ab.columnLayout(lb.frame, lb.fit, i, pane.cw, safe), `${lb.frame} ${lb.fit} ${i}`));
+    }
+  }
+  const crop = (safe) => tl.layoutBoxes(tl.normaliseProject(two({ fit: 'crop', safe }))).panes[0];
+  assert.equal(crop(true).cw, 640);
+  assert.deepEqual([crop(true).overlay.ft.panel, crop(false).overlay.ft.panel], [[550, 112], [588, 112]], 'off: 20 from the bottom, as the other edges');
+  assert.deepEqual([crop(false).overlay.live.bottom, crop(false).overlay.hitchBottom], [572, 454]);
+  assert.deepEqual(tl.layoutBoxes(tl.normaliseProject(three())).panes.map((x) => Math.round(x.cw * 1.5)), [854, 850, 852], 'the column right of its seam');
 });
 
 test('timelineGraph: one input per clip cut on the input side, black gap segments, end card hold, sound', () => {
@@ -266,6 +282,21 @@ test('three-up overlay: nothing below 92 %, three lane colours, NO VIDEO in the 
   assert.ok(card.some((e) => e.plain === 'Numbers cover the 0:06 shown · stills, loading and gaps not counted'));
   assert.ok(card.some((e) => /does best|tie at|All three/.test(e.plain)));
   assert.ok(card.some((e) => e.plain === 'B') || card.some((e) => e.plain === 'Even'));
+});
+
+test('three-up overlay, safe area off: the frame times move down to 20 from the bottom, the stats on the video stay', () => {
+  const p = (safe) => tl.normaliseProject(three({ range: { in: 0, out: 6 }, safe }));
+  const on = parse(timelineOverlay(p(true), { width: 2560, height: 1080 }).build());
+  const off = parse(timelineOverlay(p(false), { width: 2560, height: 1080 }).build());
+  for (const e of off) {
+    if (e.drawing && e.yMax - e.yMin > 540) continue;
+    assert.ok(bottomOf(e) <= 1080 - 30 + 0.5, `"${e.plain || e.text.slice(0, 60)}" reaches ${bottomOf(e).toFixed(1)}`);
+  }
+  assert.ok(off.some((e) => bottomOf(e) > 0.92 * 1080 + 0.5), 'the bottom 8 % is used');
+  const y = (evs, s) => evs.find((e) => e.plain === s).pos[1];
+  assert.ok(Math.abs(y(off, 'C · FRAME TIME · ms') - y(on, 'C · FRAME TIME · ms') - 38 * 1.5) < 0.06);
+  const avg = (evs) => evs.find((e) => /^AVG /.test(e.plain)).pos[1];
+  assert.equal(avg(off), avg(on));
 });
 
 test('rowsN and verdictN: by share of each target, ties read Even', () => {

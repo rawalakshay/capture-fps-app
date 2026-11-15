@@ -605,6 +605,7 @@ body.dragging::after {
 .ab-menu {
   position: absolute; right: 0; top: 40px; z-index: 10; width: min(460px, calc(100vw - 96px)); padding: 16px; border-radius: 12px;
   background: var(--panel); border: 1px solid var(--line-ctl); box-shadow: 0 16px 40px var(--shadow); display: flex; flex-direction: column; gap: 14px;
+  max-height: calc(100vh - 72px); overflow-y: auto; /* a short window scrolls the menu, so Export stays reachable */
 }
 #ab-export-menu > summary { padding: 0 12px 0 14px; }
 .ab-menu-head { display: flex; flex-direction: column; gap: 2px; }
@@ -651,7 +652,7 @@ body.dragging::after {
 .ed-playbtn svg { fill: currentColor; }
 .ed-playbtn:disabled { background: var(--fill); color: var(--text-4); cursor: not-allowed; }
 .ed-empty .ed-scroll { overflow-x: hidden; }
-.ed-empty .pv-fps, .ed-empty .pv-ft { display: none; }
+.ed-empty .pv-fps, .ed-empty .pv-ft, .ed-empty .pv-ftpanel { display: none; }
 .ed-now { margin-left: 8px; font-size: 15px; font-weight: 600; }
 .ed-total { font-size: 12px; color: var(--text-3); white-space: nowrap; }
 
@@ -661,33 +662,39 @@ body.dragging::after {
 .pv-vid video { position: absolute; display: block; object-fit: fill; }
 .pv-vid video.fit { inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .pv-none { position: absolute; inset: 0; display: grid; place-items: center; font: 600 30px var(--mono); letter-spacing: 0.06em; color: #5C6372; background: #0A0C0F; }
-.pv-name { position: absolute; display: flex; align-items: center; justify-content: space-between; gap: 12px; box-sizing: border-box; padding: 0 16px; }
-.pv-name.on-video { background: rgba(10, 12, 15, 0.92); border-radius: 8px; padding: 8px 12px; }
-.pv-names { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.pv-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.pv-title b { font-size: 26px; font-weight: 600; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pv-tag { width: 32px; height: 32px; border-radius: 7px; color: #0B0C0F; display: grid; place-items: center; font: 600 20px var(--mono); flex: none; }
-.pv-sub { font: 20px/1.2 var(--mono); color: #A3A9B5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pv-live { display: flex; align-items: baseline; gap: 8px; flex: none; font-family: var(--mono); }
-.pv-live b { font-size: 56px; font-weight: 600; line-height: 1; color: #F5F6F8; }
+/* Placed and sized from the export's columnLayout (edBuildMonitor); --lb is the board's label size, 18 or 20 px. */
+.pv-name { position: absolute; display: flex; flex-direction: column; box-sizing: border-box; min-width: 0; }
+.pv-title { display: flex; align-items: center; min-width: 0; flex: none; }
+.pv-title b { font-weight: 600; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pv-tag { color: #0B0C0F; display: grid; place-items: center; font-family: var(--mono); font-weight: 600; flex: none; }
+.pv-sub, .pv-cap, .pv-gut, .pv-stats, .pv-hitch, .pv-ft-head { font-family: var(--mono); font-size: var(--lb); line-height: 1.3; white-space: nowrap; }
+.pv-sub { color: #A3A9B5; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pv-live { display: flex; align-items: baseline; flex: none; font-family: var(--mono); line-height: 1; white-space: pre; }
+.pv-live b { font-weight: 600; color: #F5F6F8; }
 .pv-live b.pv-warn { color: #F5B544; }
 .pv-live b.pv-bad { color: #F2555C; }
-.pv-live span { font-size: 20px; color: #A3A9B5; }
+.pv-live span { font-size: var(--lb); color: #A3A9B5; }
 .pv-box { position: absolute; background: rgba(10, 12, 15, 0.92); border-radius: 8px; box-sizing: border-box; }
-.pv-fps { width: 250px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
-.pv-cap { font: 20px var(--mono); color: #A3A9B5; white-space: nowrap; }
+.pv-fps { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px; }
+.pv-cap { color: #A3A9B5; }
 .pv-graph { position: relative; }
 .pv-graph svg { width: 100%; display: block; overflow: visible; }
-.pv-gut { position: absolute; right: 0; transform: translateY(-50%); font: 20px var(--mono); color: #A3A9B5; }
+.pv-gut { position: absolute; right: 0; transform: translateY(-50%); color: #A3A9B5; }
 .pv-gut.t { color: #F5F6F8; }
-.pv-stats { padding: 8px 12px; font: 20px var(--mono); color: #A3A9B5; white-space: nowrap; }
+.pv-stats { padding: 8px 12px; color: #A3A9B5; }
 .pv-stats b { color: #F5F6F8; font-weight: 600; }
 .pv-stats b.pv-warn { color: #F5B544; }
 .pv-stats b.pv-bad { color: #F2555C; }
-.pv-hitch { position: absolute; padding: 4px 10px; border-radius: 6px; background: #F2555C; color: #0B0C0F; font: 600 20px var(--mono); white-space: nowrap; }
-.pv-ft { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px; }
-.pv-ft.on-video { background: rgba(10, 12, 15, 0.92); border-radius: 8px; padding: 8px 12px; }
-.pv-ft-head { display: flex; justify-content: space-between; gap: 12px; font: 20px/24px var(--mono); color: #A3A9B5; white-space: nowrap; }
+/* The export's liveBox: the live number over the run's numbers, or a still's (load's, gap's) name over its length. */
+.pv-livebox { padding: 10px 14px; }
+.pv-livebox .pv-shold b, .pv-livebox .pv-shold span { display: block; }
+.pv-livebox .pv-shold b { line-height: 1.1; color: #A3A9B5; }
+.pv-livebox .pv-shold span { margin-top: 6px; }
+.pv-hitch { position: absolute; padding: 0 10px; border-radius: 6px; background: #F2555C; color: #0B0C0F; font-weight: 600; }
+.pv-ftpanel { position: absolute; background: rgba(10, 12, 15, 0.92); }
+.pv-seam { position: absolute; }
+.pv-ft { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; }
+.pv-ft-head { display: flex; justify-content: space-between; gap: 12px; color: #A3A9B5; }
 .pv-ft-head span:last-child:not(:first-child) { color: #8E95A3; font-weight: 500; }
 .pv-sel { position: absolute; box-sizing: border-box; border: 4px dashed var(--tk); cursor: ew-resize; }
 .pv-sel span { position: absolute; left: 10px; top: 10px; padding: 6px 10px; border-radius: 6px; background: var(--tk); color: #0B0C0F; font: 600 20px var(--mono); white-space: nowrap; pointer-events: none; }

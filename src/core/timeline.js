@@ -4,13 +4,14 @@
 //
 // project = { tracks: [{ title, subtitle, clips: [{ video, outDir, in, out, at, pan = 0, zoom = 1 }] }] (A, B, C),
 //             range: { in, out }, frame: '16:9' | '21:9', fit: 'letterbox' | 'crop' | 'below' | 'third',
-//             size, encoder, quality, upscaler, sound: track index | null, endCard = true, watermark? }
+//             size, encoder, quality, upscaler, sound: track index | null, endCard = true, safe = true, watermark? }
+// safe: keep the bottom 8 % clear for YouTube's player controls; false moves the bottom panels down to the edge margin.
 // in / out are times in the source video; at is where the clip starts on the timeline.
 
 const fs = require('fs');
 const path = require('path');
 const { summarise } = require('./analysis');
-const { readAnalysis, shiftAnalysis, abData, liveFps, verdict, verdictN, AB_SIZES, videoRects, thirds } = require('./compare-ab');
+const { readAnalysis, shiftAnalysis, abData, liveFps, verdict, verdictN, AB_SIZES, videoRects, thirds, columnLayout } = require('./compare-ab');
 
 const FRAMES = ['16:9', '21:9'];
 const FITS = ['letterbox', 'crop', 'below', 'third'];
@@ -122,8 +123,9 @@ function normaliseProject(p) {
   });
   const sound = p.sound === null ? null : Number(p.sound ?? 0);
   if (sound !== null && !(Number.isInteger(sound) && sound >= 0 && sound < n)) throw new Error(`Sound must come from track A to ${LETTERS[n - 1]}, or none`);
+  if (p.safe !== undefined && typeof p.safe !== 'boolean') throw new Error(`Safe area must be true or false, not ${JSON.stringify(p.safe)}`);
   return {
-    ...p, tracks, range, frame, fit, size, sound,
+    ...p, tracks, range, frame, fit, size, sound, safe: p.safe !== false,
     encoder: p.encoder === 'cpu' ? 'cpu' : 'gpu', quality: p.quality || 'standard', upscaler: p.upscaler || 'lanczos',
     endCard: p.endCard !== false,
   };
@@ -193,13 +195,18 @@ function placeSource(rect, sw, sh, mode, pan = 0, zoom = 1) {
  * The export's geometry, from the numbers the renderer uses: frame size, each track's column (panes),
  * where its video sits (videos), and per clip where its source lands (picture) and what part shows (crop).
  * mode: 'cover' (crop fits: pan and zoom apply) or 'fit' (letterboxed, pan and zoom ignored).
+ * Each pane also has its board width cw and overlay, the export's columnLayout for it (720-board units, y from the
+ * frame top, x from the pane's left; in 'third' from its video's left, 2 px right of the pane's for B and C).
  */
 function layoutBoxes(p) {
   const n = p.tracks.length, frame = p.frame || (n === 3 ? '21:9' : '16:9'), fit = p.fit || (n === 3 ? 'third' : 'letterbox');
   const [W, H] = AB_SIZES[frame][String(p.size || '1080')] || AB_SIZES[frame][1080];
   const { mode, rects } = videoRects(frame, fit, W, H);
   const b = fit === 'third' ? thirds(W) : [0, W / 2, W];
-  const panes = rects.map((_, i) => ({ x: b[i], y: 0, w: b[i + 1] - b[i], h: H }));
+  const panes = rects.map((r, i) => {
+    const cw = (fit === 'third' ? r.w : W / 2) / (H / 720); // as ABPane measures its column
+    return { x: b[i], y: 0, w: b[i + 1] - b[i], h: H, cw, overlay: columnLayout(frame, fit, i, cw, p.safe !== false) };
+  });
   const clips = p.tracks.map((t, i) => (t.clips || []).map((c) => {
     const cap = analysisOf(c.outDir).summary.capture || {};
     return placeSource(rects[i], cap.width || 1920, cap.height || 1080, mode, Number(c.pan) || 0, Number(c.zoom) || 1);

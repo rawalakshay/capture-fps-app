@@ -2327,12 +2327,33 @@ function syncAbExport() {
   $('abx-fit-hint').textContent = (fit === 'crop' ? `Crop keeps the centre ${frame === '21:9' ? 67 : 50}% of each video's width.`
     : fit === 'below' ? 'Each video keeps its whole picture; the data sits in one band underneath.'
       : 'Each video keeps its whole picture, with the data in bands around it.') + ' Data below is 21:9 only.';
-  const src = $('opt-upscaler').querySelector('option[value="fsrcnnx"]'), o = $('abx-upscaler').querySelector('option[value="fsrcnnx"]');
-  o.disabled = src.disabled;
-  o.textContent = src.textContent;
-  if (o.disabled && o.selected) $('abx-upscaler').value = 'lanczos';
+  syncEncUp('abx-enc', 'abx-upscaler');
 }
 for (const name of ['abx-frame', 'abx-fit']) for (const r of document.querySelectorAll(`input[name="${name}"]`)) r.addEventListener('change', syncAbExport);
+
+/** A Layout menu's Encoder and Upscaler show the recording's Export options (the inspector's), what renderOptions() reads. */
+function syncEncUp(enc, up) {
+  for (const o of $(enc).options) o.disabled = $(`enc-${o.value}`).disabled;
+  $(enc).value = radioValue('opt-enc');
+  const src = $('opt-upscaler').querySelector('option[value="fsrcnnx"]'), o = $(up).querySelector('option[value="fsrcnnx"]');
+  o.disabled = src.disabled;
+  o.textContent = src.textContent;
+  $(up).value = $('opt-upscaler').value;
+}
+// Changed in a menu, they change there (and are remembered as there), so both places stay in step.
+for (const [enc, up, sync] of [['abx-enc', 'abx-upscaler', () => syncAbExport()], ['edx-enc', 'edx-upscaler', () => edSyncLayout()]]) {
+  $(enc).addEventListener('change', () => {
+    $(`enc-${$(enc).value}`).checked = true;
+    $(`enc-${$(enc).value}`).dispatchEvent(new Event('change', { bubbles: true }));
+    sync();
+  });
+  $(up).addEventListener('change', () => {
+    $('opt-upscaler').value = $(up).value;
+    $('opt-upscaler').dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+try { $('abx-safe').checked = localStorage.getItem('abSafe') !== '0'; } catch (_) { /* keep the default: on */ }
+$('abx-safe').addEventListener('change', () => { try { localStorage.setItem('abSafe', $('abx-safe').checked ? '1' : '0'); } catch (_) { /* ignore */ } });
 $('ab-export-menu').addEventListener('toggle', () => {
   if (!$('ab-export-menu').open) return;
   if (!abReady()) {
@@ -2340,7 +2361,6 @@ $('ab-export-menu').addEventListener('toggle', () => {
     $('compare-status').textContent = 'Choose A and B first.';
     return;
   }
-  $('abx-upscaler').value = $('opt-upscaler').value;
   syncAbExport();
 });
 $('ab-export-open').addEventListener('click', (e) => { if (!abReady()) e.preventDefault(); });
@@ -2354,7 +2374,7 @@ $('abx-go').addEventListener('click', async () => {
   const opts = {
     inputs: SIDES.map((k) => ({ video: abVideoPath(k), outDir: ab[k].q.result.outDir, title: ab[k].title.trim() || ab[k].q.stem, subtitle: ab[k].sub.trim(), start: ab[k].base })),
     offset: ab.offset, frame: radioValue('abx-frame'), fit: radioValue('abx-fit'), size: radioValue('abx-size'),
-    encoder: o.encoder, quality: o.quality, upscaler: $('abx-upscaler').value, sound: ab.sound.toUpperCase(), endCard: true,
+    encoder: o.encoder, quality: o.quality, upscaler: o.upscaler, sound: ab.sound.toUpperCase(), endCard: true, safe: $('abx-safe').checked,
     watermark: o.watermark,
   };
   runCompareExport(() => window.api.compareAB(opts));
@@ -2382,7 +2402,7 @@ const ED_CROPS = ['crop', 'third']; // the fits that crop, where pan and zoom ap
 const FPS_TOP = 0.219, FPS_HALF = 0.9375; // where the target and half of it sit in an FPS graph, from its top (as the export)
 const edNewTrack = () => ({ title: '', subtitle: '', clips: [] });
 const ed = {
-  p: { tracks: [edNewTrack(), edNewTrack()], range: null, frame: '16:9', fit: 'letterbox', size: '1080', sound: 0 },
+  p: { tracks: [edNewTrack(), edNewTrack()], range: null, frame: '16:9', fit: 'letterbox', size: '1080', sound: 0, safe: true },
   t: 0, sel: null, tab: 'media', zoom: 0, pps: 1, snap: true, exact: false, safe: true,
   data: null, boxes: null, error: '', media: new Map(), series: [], undo: [], redo: [],
   videos: [], spare: [], cur: [], pv: [], board: null, scale: 1, // spare: per track, the next clip cued before a cut
@@ -2433,7 +2453,7 @@ function edProject() {
       title: edTrackTitle(ti), subtitle: tr.subtitle.trim(),
       clips: tr.clips.map(({ video, outDir, in: i, out, at, pan, zoom }) => ({ video, outDir, in: i, out, at, pan, zoom })),
     })),
-    range: { ...edRange() }, frame: ed.p.frame, fit: ed.p.fit, size: ed.p.size, sound: ed.p.sound,
+    range: { ...edRange() }, frame: ed.p.frame, fit: ed.p.fit, size: ed.p.size, sound: ed.p.sound, safe: ed.p.safe !== false,
     encoder: o.encoder, quality: o.quality, upscaler: o.upscaler, endCard: true, watermark: o.watermark,
   };
 }
@@ -2539,10 +2559,17 @@ async function edAdd(cand, ti, at = null) {
   });
 }
 
-// ---- what each track shows on the timeline: play FPS, worst frame of each second, hitches, stills ----
+// ---- what each track shows on the timeline: play FPS, every frame's time, hitches, stills ----
+
+/** Index of the last of rows (sorted by their [0]) at or before x; 0 when none is. */
+function edFind(rows, x) {
+  let lo = 0, hi = rows.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (rows[mid][0] <= x) lo = mid; else hi = mid - 1; }
+  return lo;
+}
 
 function edTrackSeries(ti) {
-  const out = { fps: [], ft: [], hitches: [], paused: [], gaps: [] };
+  const out = { fps: [], runs: [], hitches: [], paused: [], gaps: [] };
   let end = edRange().in;
   for (const c of ed.p.tracks[ti].clips) {
     if (c.at - end > 0.05) out.gaps.push([end, c.at]);
@@ -2552,17 +2579,16 @@ function edTrackSeries(ti) {
     const st = m.data.summary.capture.start_s || 0;
     const tl = (a) => c.at + a + st - c.in; // analysis time -> timeline
     const inside = (a) => a + st >= c.in && a + st < c.out;
-    const p0 = out.paused.length;
     for (const [a, ms, kind] of m.data.paused) {
       const a0 = Math.max(a + st, c.in), a1 = Math.min(a + st + ms / 1000, c.out);
       if (a1 > a0) out.paused.push([c.at + a0 - c.in, c.at + a1 - c.in, kind]);
     }
-    // A second touching a still or load has no frame-time step: the export shows that span as a band, not a frame.
-    const held = (x) => out.paused.slice(p0).some(([a, b]) => x - 0.5 < b && x + 0.5 > a);
-    for (const [key, rows] of [['fps', m.data.playFps], ['ft', m.data.ftMax]]) {
-      for (const [sec, v] of rows) if (inside(sec + 0.5)) out[key].push([tl(sec + 0.5), key === 'ft' && held(tl(sec + 0.5)) ? null : v]);
-      out[key].push([clipEnd(c), null]); // the line breaks between clips
-    }
+    for (const [sec, v] of m.data.playFps) if (inside(sec + 0.5)) out.fps.push([tl(sec + 0.5), v]);
+    out.fps.push([clipEnd(c), null]); // the line breaks between clips
+    // Frame times as [timeline s, ms] change points (abData's frameRuns), cut to the clip.
+    const runs = m.data.frameRuns || [];
+    for (let i = edFind(runs, c.in - st); i < runs.length && runs[i][0] + st < c.out; i++) out.runs.push([Math.max(c.at, tl(runs[i][0])), runs[i][1]]);
+    out.runs.push([clipEnd(c), null]);
     for (const [a, ms] of m.data.hitches) if (inside(a)) out.hitches.push([tl(a), ms]);
   }
   if (edRange().out - end > 0.05) out.gaps.push([end, edRange().out]);
@@ -2596,9 +2622,10 @@ function edBoard() {
   const sizes = ABX_SIZES[ed.p.frame], [, , W, H] = sizes.find(([v]) => v === ed.p.size) || sizes[0];
   const bw = (720 * W) / H, n = ed.p.tracks.length;
   const lb = ed.boxes;
-  if (lb && Array.isArray(lb.panes) && lb.panes.length === n && lb.width === W && lb.fit === ed.p.fit) {
+  if (lb && Array.isArray(lb.panes) && lb.panes.length === n && lb.width === W && lb.height === H && lb.fit === ed.p.fit) {
     const k = 720 / lb.height, sc = (r) => ({ x: r.x * k, y: r.y * k, w: r.w * k, h: r.h * k });
-    return { W, H, bw, panes: lb.panes.map((pn, i) => ({ ...sc(pn), video: sc(lb.videos[i]) })) };
+    // L: the export's columnLayout for the pane (board px from its video's left), cw: that column's width.
+    return { W, H, bw, panes: lb.panes.map((pn, i) => ({ ...sc(pn), video: sc(lb.videos[i]), L: pn.overlay || null, cw: pn.cw })) };
   }
   // Until the core has laid it out (an empty project): the same rules, in board px.
   const pw = bw / n;
@@ -2708,6 +2735,55 @@ function edPlace(ti, t, hard = false, live = false) {
 
 const pvEl = (cls, style, text) => { const n = node('div', cls, text); Object.assign(n.style, style); return n; };
 const px = (v) => `${v}px`;
+// Type sizes and graph gutters of the export's 16:9 and 21:9 boards (NARROW and WIDE in compare-ab.js).
+const PV_NARROW = { label: 18, hero: 56, heroGap: 6, hold: 44, fpsGutter: 28, ftGutter: 56 };
+const PV_WIDE = { label: 20, hero: 72, heroGap: 14, hold: 56, fpsGutter: 32, ftGutter: 62 };
+const monoW = (s, size) => s.length * 0.6 * size; // Plex Mono: every glyph is 0.6 em, as the export measures it
+const fmtMs = (v) => (Math.abs(v - Math.round(v)) < 0.05 ? v.toFixed(0) : v.toFixed(1));
+
+/** The track's tag and title in a row, as the export's tag() and title: tag px square, title px Inter. */
+function pvTitle(ti, tag, title, gap, font = Math.round(tag * 0.555), r = tag >= 40 ? 8 : tag >= 36 ? 7 : 6) {
+  const row = pvEl('pv-title', { height: px(tag), gap: px(gap) }), b = node('b', '', edTrackTitle(ti));
+  b.style.fontSize = px(title);
+  row.append(pvEl('pv-tag', { width: px(tag), height: px(tag), fontSize: px(font), borderRadius: px(r), background: TK_VIDEO[ti] }, LETTERS[ti]), b);
+  return row;
+}
+
+/** A track's name as the export's drawName lays it out for L.name.kind (subs: every track's subtitle). */
+function pvName(L, ti, S, subs, target) {
+  const n = L.name, sub = subs[ti], lh = 1.3 * S.label, line = (s, style = {}) => pvEl('pv-sub', style, s);
+  if (n.kind === 'band') { // three-up: in the band above the video, the live number at its right
+    const top = sub ? 7 : 20, maxW = n.right - monoW(target >= 100 ? '000' : '00', 56) - monoW(' FPS', S.label) - 12 - n.x;
+    const box = pvEl('pv-name', { left: px(n.x), top: px(top), maxWidth: px(maxW) });
+    box.appendChild(pvTitle(ti, 32, 26, 10, 20, 7));
+    if (sub) box.appendChild(line(sub, { marginTop: px(14 - lh / 2) })); // centred 46 below the top
+    return box;
+  }
+  if (n.kind === 'row') { // 21:9 letterbox: all on one line in the band above the video
+    const box = pvEl('pv-name', { left: px(n.x), top: px(n.cy - 20), width: px(n.right - n.x), flexDirection: 'row', alignItems: 'center' });
+    const row = pvTitle(ti, 40, 30, 12);
+    row.lastChild.style.maxWidth = px((n.right - n.x - 52) * 0.6);
+    box.appendChild(row);
+    if (sub) box.appendChild(line(sub, { marginLeft: '12px' }));
+    return box;
+  }
+  const parts = sub.split(' · ');
+  if (n.kind === 'stack') { // 16:9 letterbox: tag and name, the subtitle under them on up to two lines
+    const box = pvEl('pv-name', { left: px(n.x), top: px(n.y), maxWidth: px(L.fps.x - 20 - n.x), gap: '6px' });
+    box.appendChild(pvTitle(ti, 36, 28, 10));
+    for (const s of parts.length > 1 ? [parts[0], parts.slice(1).join(' · ')] : sub ? [sub] : []) box.appendChild(line(s));
+    return box;
+  }
+  // A panel over the video. A subtitle too long for one line goes onto two at its ' · '; when either pane's
+  // needs two, both panels are as tall.
+  const maxW = L.fps.x - 16 - n.x, two = subs.some((x) => x.includes(' · ') && monoW(x, S.label) > maxW - 24);
+  const lines = !sub ? [] : two && parts.length > 1 ? [parts[0], parts.slice(1).join(' · ')] : [sub];
+  const box = pvEl('pv-box pv-name', { left: px(n.x), top: px(n.y), maxWidth: px(maxW), padding: '10px 14px 10px 10px',
+    height: px(20 + n.tag + (lines.length ? 4 + (two ? 2 : lines.length) * lh : 0)) });
+  box.appendChild(pvTitle(ti, n.tag, n.title, 10));
+  lines.forEach((s, i) => box.appendChild(line(s, i ? {} : { marginTop: '4px' })));
+  return box;
+}
 
 function edBuildMonitor() {
   const b = ed.board = edBoard();
@@ -2719,34 +2795,65 @@ function edBuildMonitor() {
   Object.assign(board.style, { width: px(b.bw), height: '720px' });
   board.replaceChildren();
   const r = edRange(), len = Math.max(0.001, r.out - r.in), wm = renderOptions().watermark;
+  const S = b.W / b.H > 2 ? PV_WIDE : PV_NARROW, lh = 1.3 * S.label, subs = ed.p.tracks.map((tr) => tr.subtitle.trim());
+  board.style.setProperty('--lb', px(S.label));
   ed.pv = b.panes.map((pn, ti) => {
-    const color = TK_VIDEO[ti], v = { x: pn.video.x - pn.x, y: pn.video.y - pn.y, w: pn.video.w, h: pn.video.h };
+    const color = TK_VIDEO[ti], v = { x: pn.video.x - pn.x, y: pn.video.y - pn.y, w: pn.video.w, h: pn.video.h }, L = pn.L;
     const pane = pvEl('pv-pane', { left: px(pn.x), top: px(pn.y), width: px(pn.w), height: px(pn.h) });
     const vid = pvEl('pv-vid', { left: px(v.x), top: px(v.y), width: px(v.w), height: px(v.h) });
     const none = pvEl('pv-none', {}, 'NO VIDEO');
     vid.append(edVideo(ti), edSpare(ti), none);
     pane.appendChild(vid);
-    // Name and live FPS: in the band above the video when there is one, else on the video.
-    const above = v.y >= 60;
-    const name = pvEl(`pv-name${above ? '' : ' on-video'}`, above ? { left: 0, top: 0, width: px(pn.w), height: px(Math.min(v.y, 72)) }
-      : { left: px(v.x + 12), top: px(v.y + 12), maxWidth: px(v.w - 286) });
-    const names = node('div', 'pv-names'), title = node('div', 'pv-title'), tag = node('span', 'pv-tag', LETTERS[ti]);
-    tag.style.background = color;
-    title.append(tag, node('b', '', edTrackTitle(ti)));
-    names.append(title);
-    if (ed.p.tracks[ti].subtitle.trim()) names.appendChild(node('span', 'pv-sub', ed.p.tracks[ti].subtitle.trim()));
-    const live = node('div', 'pv-live'), num = node('b'), unit = node('span', '', 'FPS');
+    board.appendChild(pane);
+    if (!L) return { none }; // not laid out by the core yet: edFetch builds the monitor again when it is
+    // Everything over the video sits where the export's columnLayout puts it, from the video's left.
+    const col = pvEl('pv-pane', { left: px(v.x), top: 0, width: px(pn.cw), height: '720px' });
+    pane.appendChild(col);
+    const target = edTarget(ti) || 60, s = ed.series[ti] || { fps: [], paused: [], gaps: [] };
+    col.appendChild(pvName(L, ti, S, subs, target));
+    const live = node('div', 'pv-live'), num = node('b'), unit = node('span', '', ' FPS');
     live.append(num, unit);
-    name.append(names, live);
-    pane.appendChild(name);
+    // The numbers over the export range. A track with nothing to count in the range (all gap) has no numbers, not red zeros.
+    const td = ed.data && ed.data.tracks && ed.data.tracks[ti], sum = td && td.gapS < len - 0.05 && td.summary;
+    // During a still, a load or a gap the line gives way to its name and length, as in the export (edTick).
+    const sline = node('div'), shold = node('div', 'pv-shold'), v1 = (val) => (val == null ? '–' : val.toFixed(1));
+    if (sum) {
+      const bv = (val) => { const lv = level(Number(val.toFixed(1)), target); return node('b', lv === 'ok' ? '' : `pv-${lv}`, val.toFixed(1)); };
+      sline.append('AVG ', bv(sum.avg_fps), ' · 1% ', bv(sum.low_1pct_fps), ' · ', node('b', '', String(sum.hitches.count)), ' HITCHES');
+    }
+    const plain = `AVG ${v1(sum ? sum.avg_fps : null)} · 1% ${v1(sum ? sum.low_1pct_fps : null)} · ${sum ? sum.hitches.count : 0} HITCHES`;
+    const oneLine = Boolean(L.live.oneLine), stats = node('div', `pv-box pv-stats${oneLine ? '' : ' pv-livebox'}`);
+    if (oneLine) { // three-up: one line at the bottom left of the video, the live number at the right of the name band
+      const holds = [...s.paused.map(([a, e, k]) => [k === 'loading' ? 'LOADING' : 'STILL', e - a]), ...s.gaps.map(([a, e]) => ['NO VIDEO', e - a])];
+      const bw = 24 + Math.max(monoW(plain, S.label), ...holds.map(([nm, l]) => monoW(`${nm} · ${l.toFixed(1)} s · not counted`, S.label)));
+      Object.assign(stats.style, { left: px(L.live.x), top: px(L.live.bottom - 16 - lh), width: px(bw) });
+      stats.append(sline, shold);
+      Object.assign(live.style, { position: 'absolute', right: '16px', top: '8px' }); // baseline at 57, the export's mid(36, 56)
+      num.style.fontSize = '56px';
+      col.appendChild(live);
+    } else { // the export's liveBox at the bottom left: the live number over the run's numbers
+      const bh = 20 + S.hero + S.heroGap + lh, names = ['LOADING', ...(s.gaps.length ? ['NO VIDEO'] : [])];
+      const bw = 28 + Math.max(monoW(plain, S.label), ...names.map((nm) => monoW(nm, S.hold)), monoW('99.9 s · not counted', S.label));
+      Object.assign(stats.style, { left: px(L.live.x), top: px(L.live.bottom - bh), width: px(bw), height: px(bh) });
+      live.style.height = px(S.hero);
+      num.style.fontSize = px(S.hero);
+      sline.style.marginTop = px(S.heroGap);
+      stats.append(live, sline, shold);
+    }
+    stats.hidden = oneLine && !sum;
+    sline.hidden = !sum;
+    col.appendChild(stats);
+    const hp = L.hitchPad ?? 6;
+    const hitch = pvEl('pv-hitch', { left: px(L.live.x), top: px(L.hitchBottom - 2 * hp - lh), paddingTop: px(hp), paddingBottom: px(hp) });
+    col.appendChild(hitch);
     // FPS over the whole range, the part played bright, with the playhead.
-    const target = edTarget(ti) || 60, s = ed.series[ti] || { fps: [], ft: [] };
+    const f = L.fps, fpad = f.pad || (f.panel ? [10, 12] : [0, 0]);
     const fy = (val) => clamp(160 * (FPS_TOP + (1 - val / target) * 2 * (FPS_HALF - FPS_TOP)), 0, 160);
-    const fps = pvEl('pv-box pv-fps', { right: px(pn.w - v.x - v.w + 12), top: px(v.y + 12) });
-    fps.appendChild(node('span', 'pv-cap', `FPS · TARGET ${target}`));
-    const g = pvEl('pv-graph', { paddingRight: '32px' });
+    const fps = pvEl(`pv-fps${f.panel ? ' pv-box' : ''}`, { left: px(f.x), top: px(f.y), width: px(f.w), padding: `${fpad[0]}px ${fpad[1]}px` });
+    fps.appendChild(node('span', 'pv-cap', f.target ? `FPS · TARGET ${target}` : 'FPS'));
+    const g = pvEl('pv-graph', { paddingRight: px(S.fpsGutter) });
     const svg = el('svg', { viewBox: '0 0 1000 160', preserveAspectRatio: 'none', 'aria-hidden': 'true' });
-    svg.style.height = '60px'; // a style attribute would break the page's CSP
+    svg.style.height = px(f.graphH); // a style attribute would break the page's CSP
     const ln = (y, op, dash) => el('line', { x1: 0, x2: 1000, y1: y, y2: y, stroke: '#F5F6F8', 'stroke-opacity': op, 'vector-effect': 'non-scaling-stroke', ...(dash ? { 'stroke-dasharray': '4 4' } : {}) });
     const pts = [];
     for (const [x, val] of s.fps) if (x >= r.in && x <= r.out) pts.push(val === null ? null : `${(((x - r.in) / len) * 1000).toFixed(1)},${fy(val).toFixed(1)}`);
@@ -2761,45 +2868,29 @@ function edBuildMonitor() {
     for (const p of lines) bright.appendChild(el('polyline', { points: p, fill: 'none', stroke: color, 'stroke-width': 3, 'vector-effect': 'non-scaling-stroke' }));
     const phLine = el('line', { x1: 0, x2: 0, y1: 0, y2: 160, stroke: '#F5F6F8', 'stroke-width': 2, 'vector-effect': 'non-scaling-stroke' });
     svg.append(bright, phLine);
-    g.append(svg, pvEl('pv-gut t', { top: '21.9%' }, String(target)), pvEl('pv-gut', { top: '93.75%' }, String(target / 2)));
+    g.append(svg, pvEl('pv-gut t', { top: '21.9%' }, String(target)), pvEl('pv-gut', { top: '93.75%' }, fmtMs(target / 2)));
     fps.appendChild(g);
-    pane.appendChild(fps);
-    // Frame time of the last 10 s: in the band below the video, or on the video above YouTube's controls.
-    const below = pn.h - v.y - v.h >= 120, ftBottom = below ? 0 : Math.max(pn.h - 662.4, pn.h - v.y - v.h + 12);
-    const ft = pvEl(`pv-ft${below ? '' : ' on-video'}`, below ? { left: 0, top: px(v.y + v.h), width: px(pn.w), padding: '8px 16px 0' }
-      : { left: px(v.x + 12), width: px(v.w - 24), bottom: px(ftBottom) });
+    col.appendChild(fps);
+    // Frame time of the last 10 s, in its panel or band; with the safe area off it sits down at the layout's edge margin.
+    const t = L.ft;
+    if (t.panel) col.appendChild(pvEl('pv-ftpanel', { left: 0, top: px(t.panel[0]), width: px(pn.cw), height: px(t.panel[1]) }));
+    const ft = pvEl('pv-ft', { left: px(t.x), top: px(t.y), width: px(t.w), gap: px(t.gap ?? 6) });
     const head = node('div', 'pv-ft-head');
-    head.appendChild(node('span', '', `${LETTERS[ti]} · FRAME TIME · ms`));
+    head.appendChild(node('span', '', `${t.prefix ? `${LETTERS[ti]} · ` : ''}FRAME TIME · ms`));
     if (wm && ti === b.panes.length - 1) head.appendChild(node('span', '', wm));
     const tf = 1000 / target, fsvg = el('svg', { viewBox: '0 0 1000 100', preserveAspectRatio: 'none', 'aria-hidden': 'true' });
-    fsvg.style.height = '64px';
+    fsvg.style.height = px(t.graphH);
     const ftLine = el('path', { fill: 'none', stroke: color, 'stroke-width': 3, 'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke' });
     const ftBands = el('path', { fill: '#F5F6F8', 'fill-opacity': 0.14 }); // stills, loads and gaps, as the export dims them
-    fsvg.append(ftBands, ln(25, 0.15), ln(50, 0.1), ftLine, ln(75, 0.6, true));
-    const fg = pvEl('pv-graph', { paddingRight: '62px' });
-    const r1 = (x) => String(Math.round(x * 10) / 10);
-    fg.append(fsvg, pvEl('pv-gut', { top: '25%' }, r1(3 * tf)), pvEl('pv-gut t', { top: '75%' }, r1(tf)));
+    fsvg.append(ftBands, ln(25, 0.15), ...(t.panel ? [] : [ln(50, 0.1)]), ftLine, ln(75, 0.6, true));
+    const fg = pvEl('pv-graph', { paddingRight: px(S.ftGutter) });
+    fg.append(fsvg, pvEl('pv-gut', { top: '25%' }, fmtMs(3 * tf)), pvEl('pv-gut t', { top: '75%' }, fmtMs(tf)));
     ft.append(head, fg);
-    pane.appendChild(ft);
-    // The numbers over the export range, and the HITCH tag above them.
-    const statsBottom = below ? pn.h - v.y - v.h + 12 : ftBottom + 120;
-    const stats = pvEl('pv-box pv-stats', { left: px(v.x + 12), bottom: px(statsBottom) });
-    // A track with nothing to count in the range (all gap) has no numbers, not red zeros.
-    const td = ed.data && ed.data.tracks && ed.data.tracks[ti], sum = td && td.gapS < len - 0.05 && td.summary;
-    // During a still, a load or a gap the line gives way to its name and length, as in the export (edTick).
-    const sline = node('span'), shold = node('span');
-    if (sum) {
-      const bv = (val) => { const lv = level(Number(val.toFixed(1)), target); return node('b', lv === 'ok' ? '' : `pv-${lv}`, val.toFixed(1)); };
-      sline.append('AVG ', bv(sum.avg_fps), ' · 1% ', bv(sum.low_1pct_fps), ' · ', node('b', '', String(sum.hitches.count)), ' HITCHES');
-    }
-    stats.append(sline, shold);
-    stats.hidden = !sum;
-    pane.appendChild(stats);
-    const hitch = pvEl('pv-hitch', { left: px(v.x + 12), bottom: px(statsBottom + 52) });
-    pane.appendChild(hitch);
-    board.appendChild(pane);
+    col.appendChild(ft);
+    // The seam between the videos, over both panes.
+    if (ti && L.divider) board.appendChild(pvEl('pv-seam', { left: px(pn.x - 1), top: px(L.video[0]), width: '2px', height: px(L.video[1]), background: L.divider === 'white' ? 'rgba(255, 255, 255, 0.55)' : '#000' }));
     const tfMax = 4 * tf;
-    return { none, num, unit, clipRect, phLine, ftLine, ftBands, hitch, stats, sline, shold, hasSum: Boolean(sum), ftY: (val) => clamp(100 - (val / tfMax) * 100, 0, 100) };
+    return { L, none, num, unit, hero: oneLine ? null : live, holdSize: S.hold, clipRect, phLine, ftLine, ftBands, hitch, stats, sline, shold, hasSum: Boolean(sum), ftY: (val) => clamp(100 - (val / tfMax) * 100, 0, 100) };
   });
   // The exact frame covers the live panes, but not the selected clip's outline.
   board.appendChild(exactImg);
@@ -2826,6 +2917,9 @@ function edBuildMonitor() {
 
 /** Fit the board in the monitor (the whole screen in full screen), with the safe-area strip on the picture. */
 function edScale() {
+  // The guide marks what the export keeps clear: nothing with the safe area off.
+  $('ed-safe-strip').hidden = !ed.safe || ed.p.safe === false;
+  $('ed-safe').disabled = ed.p.safe === false;
   const m = $('ed-monitor'), b = ed.board;
   if (!b || !m.clientWidth) return;
   const s = Math.min(m.clientWidth / b.bw, m.clientHeight / 720), ox = (m.clientWidth - b.bw * s) / 2, oy = (m.clientHeight - 720 * s) / 2;
@@ -2854,14 +2948,19 @@ function edTick() {
     // A still, load or gap the export names (0.5 s or more): no live number, its name and length in the stats box.
     const hold = live.held && live.len >= 0.5 - 1e-6 ? live : null;
     pv.none.hidden = !live.gap;
+    if (!pv.L) return;
     pv.unit.hidden = Boolean(hold);
     const key = hold ? `${hold.held}|${hold.len.toFixed(1)}` : '';
     if (pv.holdKey !== key) {
       pv.holdKey = key;
-      pv.shold.replaceChildren(...(hold ? [node('b', '', hold.held), ` · ${hold.len.toFixed(1)} s · not counted`] : []));
-      pv.sline.hidden = Boolean(hold);
+      // One line in the three-up's stats box; in the live box the name big, its length under it.
+      const name = node('b', '', hold ? hold.held : '');
+      if (pv.hero) name.style.fontSize = px(pv.holdSize);
+      pv.shold.replaceChildren(...(hold ? [name, node('span', '', `${pv.hero ? '' : ' · '}${hold.len.toFixed(1)} s · not counted`)] : []));
+      pv.sline.hidden = Boolean(hold) || !pv.hasSum;
       pv.shold.hidden = !hold;
-      pv.stats.hidden = !hold && !pv.hasSum;
+      if (pv.hero) pv.hero.hidden = Boolean(hold);
+      else pv.stats.hidden = !hold && !pv.hasSum;
     }
     if (hold) { pv.num.className = ''; pv.num.textContent = ''; }
     else if (live.fps != null) {
@@ -2872,20 +2971,20 @@ function edTick() {
     pv.clipRect.setAttribute('width', x);
     pv.phLine.setAttribute('x1', x);
     pv.phLine.setAttribute('x2', x);
-    // The last 10 s, inside the graph (the gutter labels are right of it): each second's worst frame as a step across
-    // its second, so one between two stills still shows; a null breaks the line between clips.
-    const s = ed.series[ti] || { ft: [], hitches: [] }, fx = (at) => clamp(((at - t + 10) / 10) * 1000, 0, 1000).toFixed(1);
-    let d = '', pen = 'M';
-    for (const [at, ms] of s.ft) {
-      if (ms === null) { pen = 'M'; continue; }
-      if (at + 0.5 < t - 10 || at - 0.5 > t) continue;
-      const y = pv.ftY(ms).toFixed(1);
-      d += `${pen}${fx(at - 0.5)},${y}L${fx(at + 0.5)},${y}`;
+    // The last 10 s, inside the graph (the gutter labels are right of it): every frame time as a step, as the export's
+    // ftMoving draws it, newest at the right edge. It breaks over stills and loads (abData nulls them, short ones too:
+    // each null run is a dimmed band, as the export dims them) and between clips.
+    const s = ed.series[ti] || { runs: [], paused: [], hitches: [] }, fx = (at) => clamp(((at - t + 10) / 10) * 1000, 0, 1000).toFixed(1);
+    const runs = s.runs;
+    let d = '', pen = 'M', bands = '';
+    for (let i = edFind(runs, t - 10); i < runs.length && runs[i][0] <= t; i++) {
+      const [a, ms] = runs[i], e = i + 1 < runs.length ? runs[i + 1][0] : t;
+      if (ms === null) { pen = 'M'; bands += `M${fx(a)},0H${fx(Math.min(e, t))}V100H${fx(a)}Z`; continue; }
+      d += `${pen}${fx(a)},${pv.ftY(ms).toFixed(1)}H${fx(e)}`;
       pen = 'L';
     }
     pv.ftLine.setAttribute('d', d);
-    let bands = '';
-    for (const [a, b] of [...(s.paused || []), ...(s.gaps || [])]) {
+    for (const [a, b] of s.gaps || []) {
       if (a > t || b < t - 10) continue;
       bands += `M${fx(a)},0H${fx(Math.min(b, t))}V100H${fx(a)}Z`;
     }
@@ -3056,13 +3155,13 @@ let edFetchTimer = 0;
 function edFetchSoon() { clearTimeout(edFetchTimer); edFetchTimer = setTimeout(edFetch, 120); }
 async function edFetch() {
   const seq = ++ed.dataSeq, snap = edSnap();
-  let r = { ok: false, error: '' };
-  if (ed.p.tracks.some((tr) => tr.clips.length)) r = await window.api.projectData(edProject());
+  // Asked for an empty project too: it does not validate, but its layoutBoxes place the monitor's overlay.
+  const r = await window.api.projectData(edProject()), any = ed.p.tracks.some((tr) => tr.clips.length);
   if (seq !== ed.dataSeq) return;
   ed.data = r.ok ? r.result : null;
   ed.dataSnap = snap;
   ed.boxes = (r.ok ? r.result.layoutBoxes : r.layoutBoxes) || null;
-  ed.error = r.ok ? '' : r.error;
+  ed.error = r.ok || !any ? '' : r.error;
   if (!state.running && !$('edit-mode').hidden) edStatus([ed.notice, ed.error].filter(Boolean).join(' '));
   $('ed-export').disabled = !ed.data;
   edBuildMonitor();
@@ -3101,6 +3200,8 @@ function edSyncLayout() {
   $('edit-mode').classList.toggle('ed-empty', empty);
   for (const id of ['ed-start', 'ed-back', 'ed-play', 'ed-fwd', 'ed-end', 'ed-mark-in', 'ed-mark-out']) $(id).disabled = empty;
   $(`edx-frame-${p.frame === '21:9' ? '219' : '169'}`).checked = true;
+  $('edx-safe').checked = p.safe !== false;
+  syncEncUp('edx-enc', 'edx-upscaler');
   $('edx-frame-169').disabled = three;
   const fits = three ? ['third'] : ['letterbox', 'crop', 'below'];
   const fid = document.activeElement.id; // rebuilding the radios drops keyboard focus to the page
@@ -3135,6 +3236,8 @@ function edSyncLayout() {
   $('ed-layout-sum').textContent = `${p.frame} · ${three ? '3 videos' : ED_FITS[p.fit].toLowerCase()} · ${W}×${H}`;
   $('ed-desc').textContent = `${p.frame} · ${W}×${H} · ${desc}`;
 }
+$('edx-safe').addEventListener('change', () => edCommit(() => { ed.p.safe = $('edx-safe').checked; }));
+$('ed-layout-menu').addEventListener('toggle', () => { if ($('ed-layout-menu').open) edSyncLayout(); }); // the Export options may have changed meanwhile
 for (const r of document.querySelectorAll('input[name="edx-frame"]')) {
   r.addEventListener('change', () => edCommit(() => {
     ed.p.frame = r.value;
@@ -3720,7 +3823,7 @@ $('ed-mark-out').addEventListener('click', () => edMark('out'));
 $('ed-safe').addEventListener('click', () => {
   ed.safe = !ed.safe;
   $('ed-safe').setAttribute('aria-pressed', String(ed.safe));
-  $('ed-safe-strip').hidden = !ed.safe;
+  edScale();
 });
 const edFullscreen = () => (document.fullscreenElement ? document.exitFullscreen() : $('ed-monitor').requestFullscreen()).catch(() => {});
 $('ed-full').addEventListener('click', edFullscreen);

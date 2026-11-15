@@ -70,11 +70,11 @@ function assertSafe(events, H, what) {
   }
 }
 
-function abEvents({ frame = '16:9', fit = 'letterbox', panes = [locked(), eventful()], span = 6, endCard = true, sums, subs } = {}) {
+function abEvents({ frame = '16:9', fit = 'letterbox', panes = [locked(), eventful()], span = 6, endCard = true, sums, subs, safe } = {}) {
   const [W, H] = AB_SIZES[frame][1080];
   const ov = ab.abOverlay({
     panes: panes.map((a, i) => ({ a: ab.shiftAnalysis(a, 0, span), summary: (sums || [])[i] || summarise(a, { width: 1920, height: 1080 }), title: i ? 'PS5' : 'PS5 Pro', subtitle: subs ? subs[i] : 'Forza Horizon 6 · Performance' })),
-    size: { width: W, height: H }, frame, fit, span, endCard,
+    size: { width: W, height: H }, frame, fit, span, endCard, safe,
   });
   const ass = ov.build();
   return { ass, events: parse(ass), W, H };
@@ -188,7 +188,52 @@ for (const [frame, fit] of [['16:9', 'letterbox'], ['16:9', 'crop'], ['21:9', 'l
     assert.ok(ass.includes('PS5 Pro') && ass.includes('4aLse Benchmarks'));
     assert.equal(findText(events, 1, /^AVG /).length, 2, 'one live box per video');
   });
+
+  test(`A/B ${frame} ${fit}, safe area off: the bottom panels move down to the edge margin`, () => {
+    const on = abEvents({ frame, fit }), off = abEvents({ frame, fit, safe: false }), H = off.H, k = H / 720;
+    const m = fit === 'crop' && frame === '21:9' ? 24 : 20, dy = (58 - m) * k;
+    for (const e of off.events) {
+      if (e.drawing && e.yMax - e.yMin > 0.5 * H) continue;
+      assert.ok(bottomOf(e) <= H - m * k + 0.5, `"${e.plain || e.text.slice(0, 60)}" reaches ${bottomOf(e).toFixed(1)} px, inside the ${m} px margin`);
+    }
+    assert.ok(off.events.some((e) => bottomOf(e) > 0.92 * H + 0.5), 'the bottom 8 % is used');
+    assert.equal(off.events.length, on.events.length);
+    const moved = (re) => {
+      const i = on.events.findIndex((e) => !e.drawing && re.test(e.plain));
+      return off.events[i].pos[1] - on.events[i].pos[1];
+    };
+    assert.ok(Math.abs(moved(/FRAME TIME · ms$/) - dy) < 0.06, 'the frame-time block');
+    // The crop layouts' live box and HITCH tag sit at the bottom and move with it; the bands' sit on the video and stay.
+    for (const re of [/^AVG /, /^\d+ FPS$/, /^HITCH · /]) assert.ok(Math.abs(moved(re) - (fit === 'crop' ? dy : 0)) < 0.06, String(re));
+  });
 }
+
+test('abData frameRuns: frame times as change points on the analysis clock, then the end', () => {
+  const dirs = [eventful(), analyse(rowsFromCounts([1, 1, 2, 2, 1]), HZ, 0.4, 60)].map(fixtureDir);
+  try {
+    const [ev, mixed] = dirs.map((d) => ab.abData(d).frameRuns);
+    // 2 s at 60, the 200 ms hitch, 1 s at 60, the 1.5 s load (null: the export hides it), 3.33 s at 60.
+    assert.deepEqual(ev, [[0, 16.7], [2, 200], [2.2, 16.7], [3.2, null], [4.7, 16.7], [8.0334, null]]);
+    assert.deepEqual(mixed, [[0, 16.7], [0.0333, 33.3], [0.1, 16.7], [0.1167, null]]);
+    // Read back, every shown frame gets its own time to 0.05 ms.
+    const { a } = ab.readAnalysis(dirs[0]);
+    let j = 0;
+    a.starts.forEach((s, i) => {
+      while (ev[j + 1][0] <= s + 1e-4) j++;
+      if (ev[j][1] !== null) assert.ok(Math.abs(ev[j][1] - a.frameMs[i]) <= 0.05, `frame ${i}: ${ev[j][1]} vs ${a.frameMs[i]}`);
+    });
+  } finally {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('abData frameRuns: stills under 0.5 s and play inside a merged hold are null, as ftMoving hides them', () => {
+  // Two 50 ms stills 50 ms apart merge into one 0.1-0.25 hold (the play frame between them is hidden too); none is in paused.
+  const a = { starts: [0, 0.1, 0.15, 0.2, 0.25, 0.6], frameMs: [100, 50, 50, 50, 350, 100], kind: ['ok', 'static', 'ok', 'static', 'ok', 'ok'], holds: [], duration: 0.7 };
+  const d = ab.abData('', { summary: {}, perSecond: [], a });
+  assert.deepEqual(d.frameRuns, [[0, 100], [0.1, null], [0.25, 350], [0.6, 100], [0.7, null]]);
+  assert.deepEqual(d.paused, []);
+});
 
 test('FPS graph: the target sits at 21.9 % and half of it at 93.75 % of the graph', () => {
   const { events } = abEvents();
