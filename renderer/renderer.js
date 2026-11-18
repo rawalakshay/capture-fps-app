@@ -380,6 +380,20 @@ async function pickVideo() {
   if (paths.length) addVideos(paths);
 }
 
+/** Drop library entries (and idle queue items) whose files are gone from disk; the item a job is running on stays. */
+async function syncFiles() {
+  const ok = await window.api.exists(state.library.map((e) => e.path));
+  const dead = new Set(state.library.filter((e, i) => !ok[i] && e.path !== (state.runningItem && state.runningItem.path)).map((e) => e.path));
+  state.library = state.library.filter((e) => !dead.has(e.path));
+  state.queue = state.queue.filter((q) => !dead.has(q.path));
+  if (state.current && dead.has(state.current.path)) state.current = null;
+  saveLibrary();
+  renderLibrary();
+  updateRunButton();
+  $('lib-count').textContent += ` · ${dead.size ? `removed ${dead.size} missing` : 'all files found'}`;
+}
+
+$('lib-sync').addEventListener('click', syncFiles);
 $('pick').addEventListener('click', pickVideo);
 $('pick2').addEventListener('click', pickVideo);
 

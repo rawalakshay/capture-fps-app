@@ -99,6 +99,8 @@ ipcMain.handle('pick-folder', async (_e, current) => {
   return r.canceled ? null : r.filePaths[0];
 });
 
+ipcMain.handle('exists', (_e, paths) => (Array.isArray(paths) ? paths : []).map((p) => typeof p === 'string' && fs.existsSync(p)));
+
 ipcMain.handle('probe', async (_e, video) => {
   try {
     if (!fs.existsSync(video)) return { ok: false, error: 'File not found' };

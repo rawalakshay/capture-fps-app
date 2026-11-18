@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('api', {
   pickVideo: () => ipcRenderer.invoke('pick-video'),
   pickFolder: (current) => ipcRenderer.invoke('pick-folder', current),
   probe: (video) => ipcRenderer.invoke('probe', video),
+  exists: (paths) => ipcRenderer.invoke('exists', paths),
   gpu: () => ipcRenderer.invoke('gpu'),
   vulkan: () => ipcRenderer.invoke('vulkan'),
   startJob: (opts) => ipcRenderer.invoke('start-job', opts),
