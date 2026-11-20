@@ -354,6 +354,47 @@ test('the broadcast look: a top-right panel over FPS and frame-time graphs, in e
   assert.equal(createOverlay(a, SIZE, 'Test clip', 30, 'right', SIZE, { style: 'broadcast', longGraph: true }).build(), ov.build());
 });
 
+test('the broadcast-lite look: one slim top-right row over smaller Broadcast graphs, in every theme and at 4K', () => {
+  const counts = [...Array(60).fill(2), 6, 2, 5, ...Array(118).fill(2), 29, ...Array(120).fill(2)];
+  const a = analyse(rowsFromCounts(counts), HZ, 0.4, 30);
+  for (const height of [1080, 2160]) {
+    const k = height / 1080, size = { width: 1920 * k, height, hz: HZ };
+    for (const theme of THEME_NAMES) {
+      const ov = createOverlay(a, size, 'Test clip', 30, 'left', size, { style: 'broadcast-lite', theme });
+      const ass = ov.build(), events = parse(ass), tag = `${theme}@${height}`;
+      assert.ok(!/NaN|undefined|Infinity|null/.test(ass), `${tag}: no stray values`);
+      assert.ok(ass.includes('TARGET 30') && ass.includes('TEST CLIP') && !ass.includes('RUN AVG') && !ass.includes('PACING'), `${tag}: header, no run row or pacing`);
+      // The panel: 400 x 134, 5 px from the top and right whatever position was asked for.
+      const panel = events.find((e) => e.layer === 0 && e.drawing && e.text.includes(`\\3c${assColor(THEMES[theme].BLUE)}`));
+      const [px0, py0, px1, py1] = pathBox(panel);
+      assert.ok(Math.abs(px0 - (1920 - 5 - 400) * k) < 0.2 && Math.abs(px1 - (1920 - 5) * k) < 0.2 && Math.abs(py0 - 5 * k) < 0.2 && Math.abs(py1 - 139 * k) < 0.2, `${tag}: panel at the top right`);
+      // The graph boxes: FPS 140 px tall, 12 px above the bottom; frame time 300 x 96 above it at the left.
+      const boxes = events.filter((e) => e.layer === 0 && e.drawing && e !== panel).map(pathBox);
+      assert.ok(boxes.some((b) => b.every((v, i) => Math.abs(v - [16, 928, 1864, 1068][i] * k) < 0.2)), `${tag}: FPS box`);
+      assert.ok(boxes.some((b) => b.every((v, i) => Math.abs(v - [16, 827, 316, 923][i] * k) < 0.2)), `${tag}: frame-time box`);
+      const inPanel = (x, y) => x >= px0 - 0.2 && x <= px1 + 0.2 && y >= py0 - 0.2 && y <= py1 + 0.2;
+      const inGraphs = (x, y) => x >= 16 * k - 0.2 && x <= 1904 * k + 0.2 && y >= 790 * k && y <= 1080 * k;
+      for (const e of active(events, 7.0)) {
+        if (/\\move\(/.test(e.text)) assert.ok(e.text.includes(ov.g.fps.clip) || e.text.includes(ov.g.ft.clip), `${tag}: moving event clipped to a graph`);
+        else if (e.drawing) { const [x0, y0, x1, y1] = pathBox(e); assert.ok((inPanel(x0, y0) && inPanel(x1, y1)) || (inGraphs(x0, y0) && inGraphs(x1, y1)), `${tag}: shape ${pathBox(e)}`); }
+        else if (e.plain.includes('4aLse')) assert.deepEqual(e.pos, [16 * k, 16 * k], `${tag}: watermark top left`);
+        // A text's anchor is its line box bottom, below the baseline by the descent: 0.377 em of the 56 px Oswald hero in vice.
+        else assert.ok(inPanel(e.pos[0], e.pos[1] - 22 * k) || inGraphs(...e.pos), `${tag}: ${e.plain} at ${e.pos}`);
+      }
+      // Labels on one baseline, numbers on another: the hero, AVG and 1% LOW share a y.
+      const at9 = active(events, 9.0).filter((e) => !e.drawing && e.pos && inPanel(...e.pos));
+      const ys = (re) => at9.filter((e) => re.test(e.plain)).map((e) => e.pos[1]);
+      assert.equal(new Set(ys(/^(AVG|1% LOW|FRAME MS|FPS · 0\.5 S)$/)).size, 1, `${tag}: one label baseline`);
+    }
+  }
+  const events = parse(createOverlay(a, SIZE, 'Test clip', 30, 'right', SIZE, { style: 'broadcast-lite' }).build());
+  // While the hitch is held: a red HITCH tag beside FPS, and FRAME MS counting up in red.
+  const during = active(events, 6.4);
+  assert.ok(during.some((e) => e.plain === 'HITCH') && during.some((e) => e.plain === 'FPS'), 'hold tag beside FPS');
+  assert.ok(during.some((e) => /^\d+\.\d$/.test(e.plain) && e.colors.includes(RED)), 'held time in red');
+  assert.ok(!during.some((e) => e.plain === 'FPS · 0.5 S'), 'tag replaces the window label');
+});
+
 test('the broadcast look grows with the clip, not with the clip times its window', () => {
   const count = (seconds) => {
     const counts = Array.from({ length: seconds * 30 }, (_, i) => (i % 97 === 50 ? 6 : 2));

@@ -1176,8 +1176,8 @@ class BroadcastOverlay extends Overlay {
   }
 
   /** Each graph's plot (inside its border) in frame px, its scroll speed and its clip in output px. */
-  graphs() {
-    const B = BROADCAST, b = B.BORDER, frameW = this.w / this.k, px = (v) => this.px(v);
+  graphs(B = BROADCAST) {
+    const b = B.BORDER, frameW = this.w / this.k, px = (v) => this.px(v);
     const plot = (x, y, w, h) => ({
       box: [x, y, w, h], x0: x + b, top: y + b, iw: w - 2 * b, ih: h - 2 * b, speed: (w - 2 * b) / B.WIN,
       clip: `\\clip(${Math.floor(px(x + b))},${Math.floor(px(y + b))},${Math.ceil(px(x + w - b))},${Math.ceil(px(y + h - b))})`,
@@ -1232,7 +1232,7 @@ class BroadcastOverlay extends Overlay {
   }
 
   drawChrome(D) {
-    const B = BROADCAST, c = this.c, px = (v) => this.px(v), { ox, oy } = this, { W, H, PAD } = B, { target, targetMs } = this.m;
+    const B = BROADCAST, c = this.c, px = (v) => this.px(v), { ox, oy } = this, { W, H, PAD } = B, { target } = this.m;
     this.heroLx = [];
     this.shape(0, D, roundedPath(px(ox), px(oy), px(W), px(H), px(B.R)), c.PANEL, 0.3, 0, c.BLUE, 0.62);
     this.drawAccent(D, W, H, B.R);
@@ -1264,8 +1264,13 @@ class BroadcastOverlay extends Overlay {
     while (this.frameSize > 12 && frameW(this.frameSize) > W - 2 * PAD) this.frameSize -= 0.5;
     this.bt(0, D, PAD, B.PACING_BASE, this.brun('PACING · 10 S', c.SANS_SEMI, 15, c.LABEL, 0.06), 15);
     this.drawExtras(D);
-    // The graphs: boxes, grids, axes, titles, then the lines that scroll through them. Each line is its own thin drawing:
-    // one drawing spanning the box would have libass blend a box-sized bitmap every frame.
+    this.drawGraphs(D);
+  }
+
+  /** The graphs: boxes, grids, axes, titles, then the lines that scroll through them. Each line is its own thin drawing:
+   * one drawing spanning the box would have libass blend a box-sized bitmap every frame. */
+  drawGraphs(D) {
+    const B = BROADCAST, c = this.c, px = (v) => this.px(v), { target, targetMs } = this.m;
     const R = (rs) => rectsPath(rs.map((r) => r.map(px)));
     const lines = (rs, color, alpha) => rs.forEach((r) => this.shape(0, D, R([r]), color, alpha, 1));
     const { fps, ft } = this.g, fyMax = target * 4 / 3, scale = 3 * targetMs;
@@ -1286,8 +1291,8 @@ class BroadcastOverlay extends Overlay {
       this.emit(3, 0, D, this.gtext(x, p.top + top + 0.875 * size, this.run(s, c.MONO_SEMI, size, c.TEXT), size, align));
     });
     axis(fps, this.w / this.k - B.SIDE, [1, 0.75, 0.5, 0.25, 0].map((q) => [(q * fyMax).toFixed(0), 1 - q]), 21, 'r');
-    axis(ft, B.SIDE + B.FT_W + 8, [['0.0', 0], [fmtMs(targetMs), 1 / 3], [fmtMs(2 * targetMs), 2 / 3], [fmtMs(scale), 1]], 14, 'l');
-    this.emit(3, 0, D, this.gtext(B.SIDE, ft.box[1] - 12, this.brun('FRAME-TIME (MS)', c.SANS_SEMI, 20, c.TEXT, 0.04) +
+    axis(ft, ft.box[0] + ft.box[2] + 8, [['0.0', 0], [fmtMs(targetMs), 1 / 3], [fmtMs(2 * targetMs), 2 / 3], [fmtMs(scale), 1]], 14, 'l');
+    this.emit(3, 0, D, this.gtext(ft.box[0], ft.box[1] - 12, this.brun('FRAME-TIME (MS)', c.SANS_SEMI, 20, c.TEXT, 0.04) +
       this.brun('   LAST 10 S', c.SANS_MED, 14, c.LABEL, 0.08), 20));
     this.drawFpsLine(D);
     this.drawFtLine(D);
@@ -1421,6 +1426,73 @@ class BroadcastOverlay extends Overlay {
   }
 }
 
+// ---- look G: broadcast lite, Broadcast's two graphs smaller under one row of FPS / AVG / 1% LOW / FRAME MS ----
+
+// Panel px: a header, a hairline, then a hero column and three stat columns whose labels share one baseline and
+// numbers another. Graphs as Broadcast's, in frame px: the FPS strip 140 px tall, the frame-time box 300 x 96.
+const LITE = Object.freeze({
+  W: 400, H: 134, PAD: 18, R: 10, TITLE_BASE: 30, RULE_Y: 42, COL_TOP: 54, HERO_W: 112, COL_W: 84,
+  LABEL: 13, LABEL_BASE: 64, TAG_TOP: 49, TAG_H: 18, HERO: 56, VALUE: 22, VALUE_BASE: 118,
+  GRAPHS: Object.freeze({ ...BROADCAST, FPS_H: 140, FT_W: 300, FT_H: 96 }),
+});
+
+class BroadcastLiteOverlay extends BroadcastOverlay {
+  static W = LITE.W;
+  static H = LITE.H;
+
+  graphs() { return super.graphs(LITE.GRAPHS); }
+
+  /** Every label in the panel has this one style. */
+  label(s, color = this.c.FOOT) { return this.brun(s, this.c.SANS_SEMI, LITE.LABEL, color, 0.1); }
+
+  /** Left edge of stat column i (AVG, 1% LOW, FRAME MS), 12 px after its hairline. */
+  colX(i) { return LITE.PAD + LITE.HERO_W + i * LITE.COL_W + 12; }
+
+  drawChrome(D) {
+    const L = LITE, c = this.c, px = (v) => this.px(v), { ox, oy } = this, { W, H, PAD } = L;
+    this.shape(0, D, roundedPath(px(ox), px(oy), px(W), px(H), px(L.R)), c.PANEL, 0.3, 0, c.BLUE, 0.62);
+    this.drawAccent(D, W, H, L.R);
+    let targetW = 0;
+    if (this.opts.showTarget !== false) {
+      const s = `TARGET ${this.m.target}`;
+      targetW = this.sw(s, L.LABEL, 0.1) + 12;
+      this.bt(0, D, W - PAD, L.TITLE_BASE, this.label(s, c.DIM), L.LABEL, 'r');
+    }
+    const title = this.fitTitle(W - 2 * PAD - targetW, L.LABEL, 0.1, (s, z, sp) => this.sw(s, z, sp));
+    this.bt(0, D, PAD, L.TITLE_BASE, this.label(title, c.DIM), L.LABEL);
+    const colH = L.VALUE_BASE + 8 - L.COL_TOP;
+    this.rects(0, D, [[PAD, L.RULE_Y, W - 2 * PAD, 1], ...[0, 1, 2].map((i) => [this.colX(i) - 12, L.COL_TOP, 1, colH])], c.BLUE, 0.3, 1);
+    ['AVG', '1% LOW', 'FRAME MS'].forEach((s, i) => this.bt(0, D, this.colX(i), L.LABEL_BASE, this.label(s), L.LABEL));
+    this.drawExtras(D);
+    this.drawGraphs(D);
+    const g = this.g.fps; // a fixed title: Broadcast's MIN / MAX readout is left out
+    this.emit(3, 0, D, this.gtext(g.box[0] + g.box[2], g.box[1] - 12, this.brun('FRAME-RATE (FPS)', c.SANS_SEMI, 20, c.TEXT, 0.04), 20, 'r'));
+  }
+
+  drawNumbers(tq, tEnd) {
+    const n = this.numbersAt(tq), L = LITE, c = this.c, { target } = this.m;
+    const lv = (v) => (v == null ? c.TEXT : this.levelColor(v, target));
+    // The graph's 0.5 s rate, as Broadcast's hero.
+    const hv = this.fs[Math.min(this.fs.length - 1, Math.round(tq / BROADCAST.STEP))];
+    this.bt(tq, tEnd, L.PAD - 2, L.VALUE_BASE, this.brun(fmt0(hv), c.HERO || c.MONO_SEMI, L.HERO, lv(hv), -0.02), L.HERO);
+    [n.avg, n.low].forEach((v, i) => this.text(tq, tEnd, this.colX(i), L.VALUE_BASE, this.run(fmtV(v), c.MONO_SEMI, L.VALUE, lv(v)), L.VALUE));
+  }
+
+  drawFrame(tt) {
+    const f = this.frameAt(tt), L = LITE, c = this.c, px = (v) => this.px(v), { ox, oy } = this;
+    // A hold swaps '· 0.5 S' for a red tag naming it.
+    const name = f.stalled ? HOLD_NAMES[f.kind] || 'STALL' : null;
+    const tx = L.PAD + this.sw('FPS', L.LABEL, 0.1) + 6, tw = name ? this.sw(name, L.LABEL, 0.1) + 12 : 0;
+    this.slot('lFps', 3, tt, this.btext(L.PAD, L.LABEL_BASE, this.label(name ? 'FPS' : 'FPS · 0.5 S'), L.LABEL));
+    this.slot('lTagBox', 3, tt, name ? this.shapeBody(roundedPath(px(ox + tx), px(oy + L.TAG_TOP), px(tw), px(L.TAG_H), px(3)), c.RED, 1.0) : null);
+    this.slot('lTag', 4, tt, name ? this.btext(tx + tw / 2, L.LABEL_BASE, this.label(name, c.TEXT), L.LABEL, 'c') : null);
+    // The frame on screen; through a hold it counts up in red.
+    const ms = f.stalled ? f.elapsed : f.lastMs;
+    const col = f.stalled ? c.RED : ms == null ? c.TEXT : this.ftTextColor(ms, this.m.targetMs);
+    this.slot('lFrame', 3, tt, this.btext(this.colX(2), L.VALUE_BASE, this.run(ms == null ? '–' : fmtFt(ms), c.MONO_SEMI, L.VALUE, col), L.VALUE));
+  }
+}
+
 // ---- look D: no overlay, only the extras (watermark, caption, long graph) ----
 
 class NoneOverlay extends Overlay {
@@ -1429,8 +1501,8 @@ class NoneOverlay extends Overlay {
   drawFrame(tt) { if (this.lg) this.drawLongGraphTick(tt, this.frameAt(tt)); }
 }
 
-const STYLES = ['panel', 'strip', 'glass', 'compact', 'broadcast', 'none', 'bands'];
-const LOOKS = { panel: Overlay, strip: StripOverlay, glass: GlassOverlay, compact: CompactOverlay, broadcast: BroadcastOverlay, none: NoneOverlay };
+const STYLES = ['panel', 'strip', 'glass', 'compact', 'broadcast', 'broadcast-lite', 'none', 'bands'];
+const LOOKS = { panel: Overlay, strip: StripOverlay, glass: GlassOverlay, compact: CompactOverlay, broadcast: BroadcastOverlay, 'broadcast-lite': BroadcastLiteOverlay, none: NoneOverlay };
 /** The overlay for opts.style (panel when unknown). */
 function createOverlay(a, size, title, rate, position, capture, opts = {}) {
   // bands lives with the A/B export whose parts it shares; required here so the two files do not load each other at start
@@ -1476,7 +1548,7 @@ const POSITIONS = ['left', 'center', 'right'];
 const CAPTION_POSITIONS = ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'];
 
 module.exports = {
-  Overlay, StripOverlay, GlassOverlay, CompactOverlay, BroadcastOverlay, NoneOverlay, createOverlay, STYLES, END_CARD_S,
+  Overlay, StripOverlay, GlassOverlay, CompactOverlay, BroadcastOverlay, BroadcastLiteOverlay, NoneOverlay, createOverlay, STYLES, END_CARD_S,
   assFilter, filterPath, assTime, assColor, tc, weightedFrames, POSITIONS, CAPTION_POSITIONS, LAYOUT,
   THEMES, THEME_NAMES, COLORS: THEMES.classic,
   rectsPath, roundedPath, monoW, fmtMs, cleanText, freezeAt,
