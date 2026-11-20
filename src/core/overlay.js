@@ -338,12 +338,29 @@ class Overlay {
     const frameW = this.w / this.k, margin = 24, size = 28;
     const an = { top: 7, bottom: 1 }[v] + { left: 0, center: 1, right: 2 }[h];
     const x = h === 'left' ? margin : h === 'center' ? frameW / 2 : frameW - margin;
-    const underPanel = v === 'top' && h === this.position;
-    // Bottom left is the watermark's spot; with the long graph on, the whole bottom edge is taken.
-    const lift = this.lg ? this.lg.gy - 16 - (1080 - margin) : aboveWatermark && h === 'left' ? -40 : 0;
-    const y = v === 'bottom' ? 1080 - margin + lift : underPanel ? this.oy + this.H + 16 : margin;
+    const y = this.captionY(v, h, aboveWatermark);
     this.emit(3, 0, D, `{\\an${an}\\pos(${f1(this.px(x))},${f1(this.px(y))})\\bord${f1(this.px(2))}\\3c${assColor(this.c.PANEL)}\\shad0}` +
       this.run(s, this.c.SANS_SEMI, size, this.c.TEXT, 0.04));
+  }
+
+  /** The caption's y (1080p px) on edge v at side h. */
+  captionY(v, h, aboveWatermark) {
+    const margin = 24;
+    // Bottom left is the watermark's spot; with the long graph on, the whole bottom edge is taken.
+    if (v === 'bottom') return 1080 - margin + (this.lg ? this.lg.gy - 16 - (1080 - margin) : aboveWatermark && h === 'left' ? -40 : 0);
+    return h === this.position ? this.oy + this.H + 16 : margin;
+  }
+
+  /** The theme's accent on a W x H box at the panel origin with corner radius R: a light down the left edge, or a pink-orange top edge. */
+  drawAccent(D, W, H, R) {
+    const c = this.c, px = (v) => this.px(v), { ox, oy } = this;
+    if (c.ACCENT === 'left') this.shape(0, D, roundedPath(px(ox), px(oy + 12), px(3), px(H - 24), px(1.5)), c.BLUE, 1.0, 1);
+    else if (c.ACCENT === 'top') {
+      const p = roundedPath(px(ox + 1), px(oy + 1), px(W - 2), px(H - 2), px(R - 1));
+      const clip = (x1, x2) => `\\clip(${Math.round(px(x1))},${Math.round(px(oy))},${Math.round(px(x2))},${Math.round(px(oy + 4))})`;
+      this.emit(1, 0, D, this.shapeBody(p, c.BLUE, 1.0, null, 0, clip(ox, ox + W / 2)));
+      this.emit(1, 0, D, this.shapeBody(p, c.AMBER, 1.0, null, 0, clip(ox + W / 2, ox + W)));
+    }
   }
 
   /** Watermark at the bottom left: smaller and dimmer than a caption, outlined, 80 % opaque. */
@@ -549,10 +566,10 @@ class Overlay {
   }
 
   /** Title cut to fit `avail` px with an ellipsis. */
-  fitTitle(avail, size = 14, spacing = 0.08) {
+  fitTitle(avail, size = 14, spacing = 0.08, width = sansW) {
     let title = cleanText(this.title).toUpperCase();
-    if (sansW(title, size, spacing) > avail) {
-      while (title.length > 1 && sansW(`${title}…`, size, spacing) > avail) title = title.slice(0, -1);
+    if (width(title, size, spacing) > avail) {
+      while (title.length > 1 && width(`${title}…`, size, spacing) > avail) title = title.slice(0, -1);
       title = `${title.trimEnd()}…`;
     }
     return title;
@@ -1072,14 +1089,7 @@ class CompactOverlay extends Overlay {
   drawChrome(D) {
     const C = COMPACT, c = this.c, px = (v) => this.px(v), { ox, oy } = this;
     this.shape(0, D, roundedPath(px(ox), px(oy), px(C.W), px(C.H), px(C.R)), c.PANEL, 0.08, 0, 0xFFFFFF, 0.84);
-    // The theme accents the Panel draws, sized to the tile.
-    if (c.ACCENT === 'left') this.shape(0, D, roundedPath(px(ox), px(oy + 12), px(3), px(C.H - 24), px(1.5)), c.BLUE, 1.0, 1);
-    else if (c.ACCENT === 'top') {
-      const p = roundedPath(px(ox + 1), px(oy + 1), px(C.W - 2), px(C.H - 2), px(C.R - 1));
-      const clip = (x1, x2) => `\\clip(${Math.round(px(x1))},${Math.round(px(oy))},${Math.round(px(x2))},${Math.round(px(oy + 4))})`;
-      this.emit(1, 0, D, this.shapeBody(p, c.BLUE, 1.0, null, 0, clip(ox, ox + C.W / 2)));
-      this.emit(1, 0, D, this.shapeBody(p, c.AMBER, 1.0, null, 0, clip(ox + C.W / 2, ox + C.W)));
-    }
+    this.drawAccent(D, C.W, C.H, C.R); // the theme accents the Panel draws, sized to the tile
     this.rects(0, D, [[C.div, 13, 1, 36]], c.LINE, c.LINE_A, 1);
     this.text(0, D, C.avg, C.LABEL_BASE, this.run('AVG 10 S', c.SANS_MED, 11, c.FOOT, 0.06), 11);
     this.drawExtras(D);
@@ -1108,6 +1118,309 @@ class CompactOverlay extends Overlay {
   }
 }
 
+// ---- look F: broadcast, a corner panel at the top right over scrolling FPS and frame-time graphs ----
+
+// Panel px: baselines as the design's CSS lays its rows out (22 px padding, rows 16 px apart). [free, held] for the
+// hero's labels: a held frame's tag pushes them up. Graphs in frame px: FPS along the bottom, frame time above it at the left.
+const BROADCAST = Object.freeze({
+  W: 452, H: 400, PAD: 22, EDGE: 5, R: 10,
+  TITLE_BASE: 46, PILL_TOP: 22, PILL_H: 32,
+  EYEBROW_BASE: 92.5, GRID_LABEL_BASE: 121.5, GRID_VALUE_BASE: 156.5, COL1_R: 341,
+  HERO_BASE: 162, FPS_BASE: [124, 91.5], SUB_BASE: [155, 122], TAG_TOP: 131.5, TAG_H: 28.5, TAG_BASE: 154,
+  FRAME_BASE: 201.5, DIV_Y: 223, RUN_LABEL_BASE: 261, RUN_VALUE_BASE: 291,
+  PACING_BASE: 330, BAR_Y: 342.5, BAR_H: 14, LEGEND_BASE: 378,
+  SIDE: 16, WIN: 10, STEP: 0.05, BORDER: 2, FPS_H: 200, FPS_BOTTOM: 12, AXIS_W: 40, FT_W: 360, FT_H: 132, FT_GAP: 5,
+});
+// libass sizes a font by its OS/2 win ascent + descent: 1.702 em for Oswald (Plex's 1.3 is FS_PER_PX), 0.377 em of it below the baseline.
+const OSWALD_LINE = 1.702, OSWALD_DESCENT = 0.377;
+// Oswald Bold's digits are proportional: their advances in em, to place the hero's labels.
+const OSWALD_DIGITS = [0.55, 0.385, 0.514, 0.514, 0.524, 0.509, 0.538, 0.439, 0.521, 0.538];
+/** Frame rates: one decimal below 100, none from 100 up, so never more than 4 characters. */
+const fmtV = (v) => (v == null ? '–' : v >= 99.95 ? v.toFixed(0) : v.toFixed(1));
+/** Frame times: one decimal below 1000 ms, none from there up ('116.7', '1833'). */
+const fmtFt = (v) => (v >= 999.95 ? v.toFixed(0) : v.toFixed(1));
+
+class BroadcastOverlay extends Overlay {
+  static W = BROADCAST.W;
+  static H = BROADCAST.H;
+
+  constructor(a, size, title, rate, position, capture, opts = {}) {
+    // Always the top-right corner; its own frame-time graph replaces the long one.
+    super(a, size, title, rate, 'right', capture, { ...opts, longGraph: false });
+    this.ox = this.w / this.k - BROADCAST.EDGE - this.W;
+    this.oy = BROADCAST.EDGE;
+    this.g = this.graphs();
+  }
+
+  /** This look's own runs: Oswald at the design's px (libass sizes it by its 1.702 em line, not Plex's 1.3) and upright,
+   * as the design draws it. The end card and the caption keep the shared run(). */
+  brun(s, font, size, color, spacing = 0) {
+    const k = font.startsWith('Oswald') ? OSWALD_LINE / FS_PER_PX : 1;
+    return this.run(s, font, size * k, color, spacing / k).replace(/\\fax[-\d.]+/, '');
+  }
+
+  /** textBody for brun() runs: Oswald's deeper descent would lift the baseline, so the line moves down by the difference. */
+  btext(x, baseline, runs, size, align = 'l', extra = '') {
+    return this.textBody(x, baseline + (runs.includes('\\fnOswald') ? (OSWALD_DESCENT - DESCENT) * size : 0), runs, size, align, extra);
+  }
+
+  bt(t0, t1, x, baseline, runs, size, align = 'l', layer = 3, extra = '') {
+    this.emit(layer, t0, t1, this.btext(x, baseline, runs, size, align, extra));
+  }
+
+  /** Width of this look's sans text: sansW is shaped on Plex Sans Cond, Oswald runs about 8 % narrower, and both draw
+   * '%', W and M wider than it allows. */
+  sw(s, size, spacing = 0) {
+    const wide = (re) => (s.match(re) || []).length;
+    return (sansW(s, size, spacing) + size * (0.35 * wide(/%/g) + 0.3 * wide(/[WM]/g))) * (this.c.SANS.startsWith('Oswald') ? 0.92 : 1.02);
+  }
+
+  /** Each graph's plot (inside its border) in frame px, its scroll speed and its clip in output px. */
+  graphs() {
+    const B = BROADCAST, b = B.BORDER, frameW = this.w / this.k, px = (v) => this.px(v);
+    const plot = (x, y, w, h) => ({
+      box: [x, y, w, h], x0: x + b, top: y + b, iw: w - 2 * b, ih: h - 2 * b, speed: (w - 2 * b) / B.WIN,
+      clip: `\\clip(${Math.floor(px(x + b))},${Math.floor(px(y + b))},${Math.ceil(px(x + w - b))},${Math.ceil(px(y + h - b))})`,
+    });
+    const fy = 1080 - B.FPS_BOTTOM - B.FPS_H;
+    return { fps: plot(B.SIDE, fy, frameW - 2 * B.SIDE - B.AXIS_W, B.FPS_H), ft: plot(B.SIDE, fy - B.FT_GAP - B.FT_H, B.FT_W, B.FT_H) };
+  }
+
+  /** Text and slots in frame px rather than panel px, outlined so they read on the video. */
+  gtext(x, base, runs, size, align = 'l') {
+    return this.btext(x - this.ox, base - this.oy, runs, size, align, `\\bord${f1(this.px(1.5))}\\3c${assColor(this.c.PANEL)}\\3a&H60&`);
+  }
+
+  /** An event at frame px (x, y) at time `born` that glides left with plot p's window, clipped to the plot;
+   * body follows the override block (a drawing with its top left at 0,0, or text runs). */
+  glide(layer, p, born, t0, t1, x, y, body, an = 7) {
+    const r0 = Math.round(t0 * 100) / 100, r1 = Math.round(t1 * 100) / 100;
+    if (r1 <= r0) return;
+    const at = (t) => f1(this.px(x - p.speed * (t - born))), Y = f1(this.px(y));
+    this.emit(layer, r0, r1, `{\\an${an}\\move(${at(r0)},${Y},${at(r1)},${Y},0,${Math.round((r1 - r0) * 1000)})${p.clip}\\bord0\\shad0}${body}`);
+  }
+
+  /** Line piece (x1, y1)-(x2, y2) in frame px, th thick, square ends so pieces join: [left, top, drawing from 0,0]. */
+  segment(x1, y1, x2, y2, th) {
+    const len = Math.hypot(x2 - x1, y2 - y1) || 1, dx = (x2 - x1) / len * th / 2, dy = (y2 - y1) / len * th / 2;
+    const pts = [[x1 - dx - dy, y1 - dy + dx], [x2 + dx - dy, y2 + dy + dx], [x2 + dx + dy, y2 + dy - dx], [x1 - dx + dy, y1 - dy - dx]];
+    const l = Math.min(...pts.map((q) => q[0])), t = Math.min(...pts.map((q) => q[1]));
+    return [l, t, `m ${pts.map(([x, y]) => `${f1(this.px(x - l))} ${f1(this.px(y - t))}`).join(' l ')}`];
+  }
+
+  /** Value tag centred at frame px x (at `born`), top at y, gliding with plot p from t0 to t1. Born at the plot's
+   * right edge, it waits wholly inside the plot until the point it marks has scrolled in under it. */
+  tag(p, born, t0, t1, x, y, s, fill) {
+    const size = 12, w = monoW(s, size) + 10, h = size * FS_PER_PX, lim = p.x0 + p.iw - w / 2 - 2;
+    const draw = (q, a, b, cx) => {
+      this.glide(3, q, born, a, b, cx - w / 2, y, `{\\p1\\c${assColor(fill)}}${roundedPath(0, 0, this.px(w), this.px(h), this.px(3))}{\\p0}`);
+      this.glide(4, q, born, a, b, cx, y + h, this.run(s, this.c.MONO_SEMI, size, this.c.TEXT), 2);
+    };
+    const tc = x > lim ? Math.min(t1, born + (x - lim) / p.speed) : t0;
+    if (tc > t0) draw({ ...p, speed: 0 }, t0, tc, lim);
+    draw(p, Math.max(t0, tc), t1, x);
+  }
+
+  drawWatermark(D, s) { // top left: the bottom belongs to the graphs
+    this.emit(3, 0, D, `{\\an7\\pos(${f1(this.px(16))},${f1(this.px(16))})\\bord${f1(this.px(1.5))}\\3c${assColor(this.c.PANEL)}` +
+      `\\1a&H33&\\3a&H33&\\shad0}` + this.brun(s, this.c.SANS_SEMI, 16, this.c.TEXT, 0.06));
+  }
+
+  captionY(v, h, aboveWatermark) { // above the graphs; at the top under the panel or the watermark
+    if (v === 'bottom') return this.g.ft.box[1] - 40;
+    return h === 'right' ? this.oy + this.H + 16 : h === 'left' && aboveWatermark ? 48 : 24;
+  }
+
+  drawChrome(D) {
+    const B = BROADCAST, c = this.c, px = (v) => this.px(v), { ox, oy } = this, { W, H, PAD } = B, { target, targetMs } = this.m;
+    this.heroLx = [];
+    this.shape(0, D, roundedPath(px(ox), px(oy), px(W), px(H), px(B.R)), c.PANEL, 0.3, 0, c.BLUE, 0.62);
+    this.drawAccent(D, W, H, B.R);
+    let pillW = 0;
+    if (this.opts.showTarget !== false) {
+      const s = `TARGET ${target}`;
+      pillW = this.sw(s, 18, 0.06) + 16;
+      this.shape(0, D, roundedPath(px(ox + W - PAD - pillW), px(oy + B.PILL_TOP), px(pillW), px(B.PILL_H), px(4)), c.PANEL, 0.55, 1, c.BLUE, 0);
+      this.bt(0, D, W - PAD - pillW / 2, B.TITLE_BASE, this.brun(s, c.SANS_MED, 18, c.TEXT, 0.06), 18, 'c');
+    }
+    this.bt(0, D, PAD, B.TITLE_BASE, this.brun(this.fitTitle(W - 2 * PAD - pillW - 8, 16, 0.08, (s, z, sp) => this.sw(s, z, sp)), c.SANS_SEMI, 16, c.DIM, 0.08), 16);
+    this.bt(0, D, W - PAD, B.EYEBROW_BASE, this.brun('LAST 10 S', c.SANS_MED, 18, c.FOOT, 0.08), 18, 'r');
+    this.bt(0, D, B.COL1_R, B.GRID_LABEL_BASE, this.brun('AVG', c.SANS_SEMI, 15, c.LABEL, 0.06), 15, 'r');
+    this.bt(0, D, W - PAD, B.GRID_LABEL_BASE, this.brun('1% LOW', c.SANS_SEMI, 15, c.LABEL, 0.06), 15, 'r');
+    this.rects(0, D, [[PAD, B.DIV_Y, W - 2 * PAD, 1]], c.BLUE, 0.3, 1);
+    // RUN row: five label-wide columns spread edge to edge with equal gaps (flex space-between), values left-aligned under
+    // their labels; in a wider sans than Oswald the labels shrink until the gaps are at least 12 px.
+    const labels = ['RUN AVG', '1% LOW', '0.1% LOW', 'MISSED', 'HITCHES'];
+    const cols = (size) => labels.map((s) => this.sw(s, size, 0.06));
+    let runSize = 18;
+    while (runSize > 12 && cols(runSize).reduce((x, y) => x + y) + 4 * 12 > W - 2 * PAD) runSize -= 0.5;
+    const ws = cols(runSize), gap = (W - 2 * PAD - ws.reduce((x, y) => x + y)) / 4;
+    this.runX = [];
+    labels.reduce((x, s, i) => { this.runX.push(x); return x + ws[i] + gap; }, PAD);
+    labels.forEach((s, i) => this.bt(0, D, this.runX[i], B.RUN_LABEL_BASE, this.brun(s, c.SANS_MED, runSize, c.FOOT, 0.06), runSize));
+    // FRAME row: both labels shrink the same way if, with values of up to 9 characters (' 116.7 ms', ' 12000 ms'), the sides would meet.
+    const frameW = (size) => this.sw('FRAME ON SCREEN', size, 0.08) + this.sw('10 S MAX', size, 0.08) + 2 * monoW(' 000.0 ms', 15) + 10;
+    this.frameSize = 18;
+    while (this.frameSize > 12 && frameW(this.frameSize) > W - 2 * PAD) this.frameSize -= 0.5;
+    this.bt(0, D, PAD, B.PACING_BASE, this.brun('PACING · 10 S', c.SANS_SEMI, 15, c.LABEL, 0.06), 15);
+    this.drawExtras(D);
+    // The graphs: boxes, grids, axes, titles, then the lines that scroll through them. Each line is its own thin drawing:
+    // one drawing spanning the box would have libass blend a box-sized bitmap every frame.
+    const R = (rs) => rectsPath(rs.map((r) => r.map(px)));
+    const lines = (rs, color, alpha) => rs.forEach((r) => this.shape(0, D, R([r]), color, alpha, 1));
+    const { fps, ft } = this.g, fyMax = target * 4 / 3, scale = 3 * targetMs;
+    for (const p of [fps, ft]) {
+      const [x, y, w, h] = p.box, b = B.BORDER;
+      this.shape(0, D, R([p.box]), c.PANEL, 0.55, 0);
+      lines([[x, y, w, b], [x, y + h - b, w, b], [x, y + b, b, h - 2 * b], [x + w - b, y + b, b, h - 2 * b]], c.TEXT, 0.85);
+      lines([[p.x0 + p.iw / 2 - 0.75, p.top, 1.5, p.ih]], c.TEXT, 0.6);
+    }
+    lines([0.25, 0.5].map((q) => [fps.x0, fps.top + fps.ih * (1 - q), fps.iw, 1]), c.TEXT, 0.35);
+    lines([1 / 3, 2 / 3].map((q) => [ft.x0, ft.top + ft.ih * q, ft.iw, 1]), c.TEXT, 0.35);
+    const ty = fps.top + fps.ih * (1 - target / fyMax), dash = [];
+    for (let x = fps.x0; x < fps.x0 + fps.iw; x += 12) dash.push([x, ty - 0.75, Math.min(6, fps.x0 + fps.iw - x), 1.5]);
+    this.shape(0, D, R(dash), c.AMBER, 1.0, 1);
+    // Axis labels beside each box, the top and bottom ones kept level with it; whole frame rates, so '53' not '53.3' fits the column.
+    const axis = (p, x, vals, size, align) => vals.forEach(([s, q]) => {
+      const top = Math.min(p.ih - size, Math.max(0, p.ih * q - size / 2));
+      this.emit(3, 0, D, this.gtext(x, p.top + top + 0.875 * size, this.run(s, c.MONO_SEMI, size, c.TEXT), size, align));
+    });
+    axis(fps, this.w / this.k - B.SIDE, [1, 0.75, 0.5, 0.25, 0].map((q) => [(q * fyMax).toFixed(0), 1 - q]), 21, 'r');
+    axis(ft, B.SIDE + B.FT_W + 8, [['0.0', 0], [fmtMs(targetMs), 1 / 3], [fmtMs(2 * targetMs), 2 / 3], [fmtMs(scale), 1]], 14, 'l');
+    this.emit(3, 0, D, this.gtext(B.SIDE, ft.box[1] - 12, this.brun('FRAME-TIME (MS)', c.SANS_SEMI, 20, c.TEXT, 0.04) +
+      this.brun('   LAST 10 S', c.SANS_MED, 14, c.LABEL, 0.08), 20));
+    this.drawFpsLine(D);
+    this.drawFtLine(D);
+  }
+
+  /** The 0.5 s rate every 50 ms (this.fs[k] at k * STEP: play frames over the whole window, so a still or a load dips it
+   * like the design's), drawn as one gliding piece per sample, with one tag per dip below 90 % of the target at its lowest
+   * point so far: the tag labels the line as drawn, holds included. */
+  drawFpsLine(D) {
+    const B = BROADCAST, c = this.c, p = this.g.fps, { starts, kind } = this.a, { target, floorS, refreshMs } = this.m;
+    const minSpan = refreshMs / 1000, fyMax = target * 4 / 3, right = p.x0 + p.iw;
+    const Y = (v) => p.top + p.ih * (1 - Math.min(v, fyMax) / fyMax);
+    const fs = this.fs = [null];
+    for (let k = 1; k * B.STEP <= D + 1e-9; k++) {
+      const t = k * B.STEP, span = Math.min(0.5, t);
+      fs.push(span >= minSpan ? weightedFrames(starts, this.ends, t - span, t, t, floorS, kind) / span : null);
+    }
+    const tagUntil = (d, t1) => {
+      const v = Math.round(d.v); // coloured by the number it shows
+      this.tag(p, d.t, d.t, Math.min(D, t1), right, Math.min(Y(d.v) - p.top, p.ih - 30) + p.top + 8, String(v), v >= 0.8 * target ? c.AMBER : c.RED);
+    };
+    let dip = null;
+    for (let k = 1; k < fs.length; k++) {
+      const v = fs[k], t = k * B.STEP;
+      if (fs[k - 1] != null && v != null) {
+        const [l, top, path] = this.segment(right - p.speed * B.STEP, Y(fs[k - 1]), right, Y(v), 3);
+        this.glide(2, p, t, t, Math.min(D, t + B.WIN + B.STEP), l, top, `{\\p1\\c${assColor(c.BLUE)}}${path}{\\p0}`);
+      }
+      if (v == null || v >= 0.9 * target) {
+        if (dip) tagUntil(dip, dip.t + B.WIN);
+        dip = null;
+      } else if (!dip || v < dip.v) { // a new low moves the dip's one tag there
+        if (dip) tagUntil(dip, t);
+        dip = { v, t };
+      }
+    }
+    if (dip) tagUntil(dip, dip.t + B.WIN);
+  }
+
+  /** One gliding piece per frame, 0 ms at the top, one colour as in the design. A frame past the
+   * scale (3x the target) is a step: it drops at its start once it passes the scale and runs along the bottom while it
+   * lasts. Play frames over 2.05x the target get a red tag, one per cluster (the worst). */
+  drawFtLine(D) {
+    const B = BROADCAST, c = this.c, p = this.g.ft, { frameMs, kind } = this.a, ends = this.ends, { targetMs } = this.m;
+    const scale = 3 * targetMs, right = p.x0 + p.iw, Y = (ms) => p.top + p.ih * Math.min(ms, scale) / scale, bottom = Y(scale);
+    const col = c.BLUE;
+    const piece = (born, t1, x1, y1, x2, y2) => {
+      const [l, top, path] = this.segment(x1, y1, x2, y2, 2.5);
+      this.glide(2, p, born, born, Math.min(D, t1), l, top, `{\\p1\\c${assColor(col)}}${path}{\\p0}`);
+    };
+    const tagUntil = (sp, t1) => this.tag(p, sp.t, sp.t, Math.min(D, t1), right, p.top + p.ih - 3 - 12 * FS_PER_PX, sp.ms.toFixed(0), c.RED);
+    let spike = null, lastI = -99;
+    for (let i = 1; i < frameMs.length && ends[i] <= D; i++) {
+      const s = ends[i - 1], e = ends[i], ms = frameMs[i], xs = right - p.speed * (e - s), play = isPlay(kind[i]);
+      if (ms <= scale) piece(e, e + B.WIN + 0.05, xs, Y(frameMs[i - 1]), right, Y(ms));
+      else {
+        const ts = s + scale / 1000, x0 = right - p.speed * (ts - s);
+        piece(ts, s + B.WIN + 0.05, x0, Y(frameMs[i - 1]), x0, bottom);
+        piece(ts, e, x0, bottom, right + p.speed * (e - ts), bottom); // reaches the right edge until the frame ends
+        piece(e, e + B.WIN + 0.05, xs, bottom, right, bottom);
+      }
+      if (ms <= 2.05 * targetMs || !play) continue;
+      if (spike && i - lastI <= 8) { // back to back: the cluster keeps one tag, on its worst frame
+        if (ms > spike.ms) { tagUntil(spike, e); spike = { ms, t: e }; }
+      } else {
+        if (spike) tagUntil(spike, spike.t + B.WIN);
+        spike = { ms, t: e };
+      }
+      lastI = i;
+    }
+    if (spike) tagUntil(spike, spike.t + B.WIN);
+  }
+
+  drawNumbers(tq, tEnd) {
+    const n = this.numbersAt(tq), B = BROADCAST, c = this.c, px = (v) => this.px(v), { ox, oy } = this, { W, PAD } = B, { target } = this.m;
+    // The graph's 0.5 s rate (play frames over the whole window): through a hold it falls, as in the design's hold state.
+    const hv = this.fs[Math.min(this.fs.length - 1, Math.round(tq / B.STEP))];
+    const heroS = fmt0(hv), heroCol = hv == null ? c.TEXT : this.levelColor(hv, target);
+    const hero = (col) => this.brun(heroS, c.HERO || c.MONO_SEMI, 104, col, -0.02);
+    if (c.TWO_TONE && hv != null && heroCol === c.TEXT) { // as the Panel's: the digits' top 55 % BLUE, the rest AMBER
+      const split = Math.round(px(oy + B.HERO_BASE - 0.45 * HERO_CAP * 104));
+      this.bt(tq, tEnd, PAD, B.HERO_BASE, hero(c.BLUE), 104, 'l', 3, `\\clip(0,0,${this.w},${split})`);
+      this.bt(tq, tEnd, PAD, B.HERO_BASE, hero(c.AMBER), 104, 'l', 3, `\\clip(0,${split},${this.w},${this.h})`);
+    } else this.bt(tq, tEnd, PAD, B.HERO_BASE, hero(heroCol), 104);
+    // Where the hero's labels go for this tick (drawFrame places them), 10 px after its digits, and where the AVG value starts.
+    this.heroLx.push([PAD + [...heroS].reduce((w, ch) => w + (c.HERO ? OSWALD_DIGITS[ch] ?? 0.56 : 0.6) - 0.02, 0) * 104 + 10,
+      B.COL1_R - monoW(fmtV(n.avg), 28)]);
+    const lv = (v) => (v == null ? c.TEXT : this.levelColor(v, target));
+    this.text(tq, tEnd, B.COL1_R, B.GRID_VALUE_BASE, this.run(fmtV(n.avg), c.MONO_SEMI, 28, lv(n.avg)), 28, 'r');
+    this.text(tq, tEnd, W - PAD, B.GRID_VALUE_BASE, this.run(fmtV(n.low), c.MONO_SEMI, 28, lv(n.low)), 28, 'r');
+    [fmtV(n.runAvg), fmtV(n.run1), fmtV(n.run01), n.missed == null ? '–' : `${(n.missed * 100).toFixed(1)}%`, String(n.hitches)].forEach((s, i) =>
+      this.text(tq, tEnd, this.runX[i], B.RUN_VALUE_BASE, this.run(s, c.MONO_SEMI, 20, i === 4 && n.hitches ? c.AMBER : c.TEXT), 20));
+    const p = n.pacing, sh = (v) => v / p.n;
+    if (p) this.stackedBar(tq, tEnd, [[sh(p.on), c.BLUE], [sh(p.late), c.AMBER], [sh(p.stall), c.RED]], PAD, B.BAR_Y, W - 2 * PAD, B.BAR_H, false);
+    let x = PAD;
+    [['ON TIME', 'on', c.BLUE], ['LATE', 'late', c.AMBER], ['STALL', 'stall', c.RED]].forEach(([label, key, col], i) => {
+      const s = p && `${label} ${Math.round(sh(p[key]) * 100)}%`;
+      this.slot(`bSq${i}`, 2, tq, p ? this.shapeBody(roundedPath(px(ox + x), px(oy + B.LEGEND_BASE - 9.5), px(10), px(10), px(2)), col, 1.0) : null);
+      this.slot(`bLeg${i}`, 3, tq, p ? this.textBody(x + 16, B.LEGEND_BASE, this.run(s, c.MONO_MED, 13, c.LABEL), 13) : null);
+      if (p) x += 16 + monoW(s, 13) + 18;
+    });
+  }
+
+  drawFrame(tt) {
+    const f = this.frameAt(tt), B = BROADCAST, c = this.c, px = (v) => this.px(v), { ox, oy } = this, { targetMs } = this.m;
+    const [lx, avgL] = this.heroLx[Math.min(this.heroLx.length - 1, Math.floor(tt / FPS_BUCKET + 1e-6))] || [B.PAD, B.COL1_R];
+    const held = f.stalled ? 1 : 0, name = f.stalled ? HOLD_NAMES[f.kind] || 'STALL' : null;
+    // The hold's tag ends 6 px before the AVG value on screen; a long name shrinks to fit there, but never below 14 px.
+    const ts = name ? Math.max(14, Math.min(18, 18 * (avgL - 6 - lx - 16) / this.sw(name, 18, 0.08))) : 18;
+    const tw = name ? this.sw(name, ts, 0.08) + 16 : 0;
+    this.slot('bFps', 3, tt, this.btext(lx, B.FPS_BASE[held], this.brun('FPS', c.SANS_SEMI, 18, c.LABEL, 0.06), 18));
+    this.slot('bSub', 3, tt, this.btext(lx, B.SUB_BASE[held], this.brun('0.5 S', c.SANS_MED, 18, c.FOOT, 0.06), 18));
+    this.slot('bTagBox', 3, tt, name ? this.shapeBody(roundedPath(px(ox + lx), px(oy + B.TAG_TOP), px(tw), px(B.TAG_H), px(4)), c.RED, 1.0) : null);
+    this.slot('bTag', 4, tt, name ? this.btext(lx + tw / 2, B.TAG_BASE, this.brun(name, c.SANS_SEMI, ts, c.TEXT, 0.08), ts, 'c') : null);
+    const ms = f.stalled ? `${f.elapsed.toFixed(0)} ms` : f.lastMs == null ? '–' : `${fmtFt(f.lastMs)} ms`;
+    const col = f.stalled ? c.RED : f.lastMs == null ? c.TEXT : this.ftTextColor(f.lastMs, targetMs), fz = this.frameSize;
+    this.slot('bFrame', 3, tt, this.btext(B.PAD, B.FRAME_BASE, this.brun('FRAME ON SCREEN', c.SANS_MED, fz, c.FOOT, 0.08) + this.run(` ${ms}`, c.MONO_SEMI, 15, col), fz));
+    const { frameMs, kind } = this.a, ends = this.ends;
+    let mx = 0;
+    for (let i = bisectRight(ends, tt - B.WIN), hi = bisectRight(ends, tt); i < hi; i++) if (isPlay(kind[i]) && frameMs[i] > mx) mx = frameMs[i];
+    this.slot('bMax', 3, tt, this.btext(B.W - B.PAD, B.FRAME_BASE, this.brun('10 S MAX', c.SANS_MED, fz, c.FOOT, 0.08) +
+      this.run(` ${mx ? `${fmtFt(mx)} ms` : '–'}`, c.MONO_SEMI, 15, c.AMBER), fz, 'r'));
+    // FPS graph title: min and max of the line drawn so far in the window, so it agrees with the line and its tags.
+    const fs = this.fs, k1 = Math.min(fs.length - 1, Math.floor(tt / B.STEP + 1e-6));
+    let mn = Infinity, mxf = -Infinity;
+    for (let k = Math.max(1, Math.ceil((tt - B.WIN) / B.STEP - 1e-6)); k <= k1; k++) if (fs[k] != null) { mn = Math.min(mn, fs[k]); mxf = Math.max(mxf, fs[k]); }
+    const g = this.g.fps;
+    this.slot('bFpsHead', 3, tt, this.gtext(g.box[0] + g.box[2], g.box[1] - 12,
+      this.brun(`LAST 10 S${mxf >= mn ? ` · MIN ${mn.toFixed(0)} · MAX ${mxf.toFixed(0)}` : ''}   `, c.SANS_MED, 14, c.LABEL, 0.08) +
+      this.brun('FRAME-RATE (FPS)', c.SANS_SEMI, 20, c.TEXT, 0.04), 20, 'r'));
+  }
+}
+
 // ---- look D: no overlay, only the extras (watermark, caption, long graph) ----
 
 class NoneOverlay extends Overlay {
@@ -1116,8 +1429,8 @@ class NoneOverlay extends Overlay {
   drawFrame(tt) { if (this.lg) this.drawLongGraphTick(tt, this.frameAt(tt)); }
 }
 
-const STYLES = ['panel', 'strip', 'glass', 'compact', 'none', 'bands'];
-const LOOKS = { panel: Overlay, strip: StripOverlay, glass: GlassOverlay, compact: CompactOverlay, none: NoneOverlay };
+const STYLES = ['panel', 'strip', 'glass', 'compact', 'broadcast', 'none', 'bands'];
+const LOOKS = { panel: Overlay, strip: StripOverlay, glass: GlassOverlay, compact: CompactOverlay, broadcast: BroadcastOverlay, none: NoneOverlay };
 /** The overlay for opts.style (panel when unknown). */
 function createOverlay(a, size, title, rate, position, capture, opts = {}) {
   // bands lives with the A/B export whose parts it shares; required here so the two files do not load each other at start
@@ -1163,7 +1476,7 @@ const POSITIONS = ['left', 'center', 'right'];
 const CAPTION_POSITIONS = ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'];
 
 module.exports = {
-  Overlay, StripOverlay, GlassOverlay, CompactOverlay, NoneOverlay, createOverlay, STYLES, END_CARD_S,
+  Overlay, StripOverlay, GlassOverlay, CompactOverlay, BroadcastOverlay, NoneOverlay, createOverlay, STYLES, END_CARD_S,
   assFilter, filterPath, assTime, assColor, tc, weightedFrames, POSITIONS, CAPTION_POSITIONS, LAYOUT,
   THEMES, THEME_NAMES, COLORS: THEMES.classic,
   rectsPath, roundedPath, monoW, fmtMs, cleanText, freezeAt,

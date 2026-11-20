@@ -276,6 +276,95 @@ test('the compact look shows FPS, average, frame time and the graph, nothing els
   assert.ok(active(events, 3.0).some((e) => e.plain === '483' && e.colors.includes(RED)), 'overflow label on the graph');
 });
 
+/** Bounding box (output px) of a still drawing's path. */
+function pathBox(e) {
+  const nums = e.text.replace(/^.*?\\p1[^}]*\}/, '').replace(/\{\\p0\}$/, '').match(/-?[\d.]+/g).map(Number);
+  const xs = nums.filter((_, i) => i % 2 === 0), ys = nums.filter((_, i) => i % 2 === 1);
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+}
+
+test('the broadcast look: a top-right panel over FPS and frame-time graphs, in every theme and at 4K', () => {
+  // 30 fps on 60 Hz: two back-to-back spikes (100 and 83 ms) at 2 s, a 483 ms hitch at 6.15 s.
+  const counts = [...Array(60).fill(2), 6, 2, 5, ...Array(118).fill(2), 29, ...Array(120).fill(2)];
+  const a = analyse(rowsFromCounts(counts), HZ, 0.4, 30);
+  for (const height of [1080, 2160]) {
+    const k = height / 1080, size = { width: 1920 * k, height, hz: HZ };
+    for (const theme of THEME_NAMES) {
+      const ov = createOverlay(a, size, 'Test clip', 30, 'left', size, { style: 'broadcast', theme });
+      const ass = ov.build(), events = parse(ass), tag = `${theme}@${height}`;
+      assert.ok(!/NaN|undefined|Infinity|null/.test(ass), `${tag}: no stray values`);
+      assert.ok(ass.includes('TARGET 30') && ass.includes('TEST CLIP') && !ass.includes('1080P60'), `${tag}: title and target pill only`);
+      // The panel: 452 x 400 with its BLUE edge, 5 px from the top and right whatever position was asked for.
+      const panel = events.find((e) => e.layer === 0 && e.drawing && e.text.includes(`\\3c${assColor(THEMES[theme].BLUE)}`));
+      const [px0, py0, px1, py1] = pathBox(panel);
+      assert.ok(Math.abs(px0 - (1920 - 5 - 452) * k) < 0.2 && Math.abs(px1 - (1920 - 5) * k) < 0.2 && Math.abs(py0 - 5 * k) < 0.2 && Math.abs(py1 - 405 * k) < 0.2, `${tag}: panel at the top right`);
+      // The graph boxes: FPS full width 12 px above the bottom, frame time 360 x 132 above it at the left.
+      const boxes = events.filter((e) => e.layer === 0 && e.drawing && e !== panel).map(pathBox);
+      assert.ok(boxes.some((b) => b.every((v, i) => Math.abs(v - [16, 868, 1864, 1068][i] * k) < 0.2)), `${tag}: FPS box`);
+      assert.ok(boxes.some((b) => b.every((v, i) => Math.abs(v - [16, 731, 376, 863][i] * k) < 0.2)), `${tag}: frame-time box`);
+      // Everything on screen sits in the panel, in the graph area at the bottom, or is the watermark at the top left.
+      const inPanel = (x, y) => x >= px0 - 0.2 && x <= px1 + 0.2 && y >= py0 - 0.2 && y <= py1 + 0.2;
+      const inGraphs = (x, y) => x >= 16 * k - 0.2 && x <= 1904 * k + 0.2 && y >= 690 * k && y <= 1080 * k;
+      for (const e of active(events, 7.0)) {
+        if (/\\move\(/.test(e.text)) assert.ok(e.text.includes(ov.g.fps.clip) || e.text.includes(ov.g.ft.clip), `${tag}: moving event clipped to a graph`);
+        else if (e.drawing) { const [x0, y0, x1, y1] = pathBox(e); assert.ok((inPanel(x0, y0) && inPanel(x1, y1)) || (inGraphs(x0, y0) && inGraphs(x1, y1)), `${tag}: shape ${pathBox(e)}`); }
+        else if (e.plain.includes('4aLse')) assert.deepEqual(e.pos, [16 * k, 16 * k], `${tag}: watermark top left`);
+        else assert.ok(inPanel(...e.pos) || inGraphs(...e.pos), `${tag}: ${e.plain} at ${e.pos}`);
+      }
+      const hero = active(events, 9.0).filter((e) => e.plain === '30' && e.pos && Math.abs(e.pos[0] - px0 - 22 * k) < 0.2);
+      assert.ok(hero.length >= 1, `${tag}: hero`);
+    }
+  }
+  const ov = createOverlay(a, SIZE, 'Test clip', 30, 'right', SIZE, { style: 'broadcast' });
+  const events = parse(ov.build());
+  // One tag per spike cluster (the worst frame) and one per dip, gliding with the lines.
+  const tags = (clip) => events.filter((e) => !e.drawing && e.text.includes(clip));
+  assert.deepEqual([...new Set(tags(ov.g.ft.clip).map((e) => e.plain))], ['100', '483'], 'one tag per spike cluster');
+  assert.ok(tags(ov.g.ft.clip).every((e) => e.layer === 4), 'spike tags over their box');
+  const dipsAt = (t) => active(tags(ov.g.fps.clip), t);
+  assert.equal(dipsAt(7.5).length, 2, 'one tag per dip once both are over');
+  // A new tag waits wholly inside its box: its right edge never starts past the plot's.
+  for (const p of [ov.g.fps, ov.g.ft]) {
+    for (const e of events.filter((e) => e.drawing && e.layer === 3 && e.text.includes(p.clip))) {
+      const x = Number(/\\move\(([\d.]+)/.exec(e.text)[1]);
+      assert.ok(x + pathBox(e)[2] <= (p.x0 + p.iw) * ov.k + 0.2, `tag inside at ${e.start}`);
+    }
+  }
+  // While the hitch is held the hero gets a red HITCH tag and the frame on screen counts up in red, in ms past 1 s too.
+  const during = active(events, 6.4);
+  assert.ok(during.some((e) => e.plain === 'HITCH'), 'hold tag');
+  assert.ok(during.some((e) => /^FRAME ON SCREEN \d+ ms$/.test(e.plain) && e.colors.includes(RED)), 'held time in red');
+  // A still: the hero shows the real 0.5 s rate (0, red), the FPS line keeps going through it, and the frame-time line
+  // runs along the bottom in the line's one colour, without a spike tag: a still is not a hitch. The FPS dip gets one tag, at its low.
+  const rows = rowsFromCounts([...Array(90).fill(2), 150, ...Array(60).fill(2)]);
+  for (let k = 81; k < 90; k++) rows[2 * k][1] = 0.6; // barely any motion before the 2.5 s hold at 3 s: a still
+  const still = analyse(rows, HZ, 0.4, 30);
+  assert.equal(still.kind[90], 'static');
+  const sov = createOverlay(still, SIZE, 'Test clip', 30, 'right', SIZE, { style: 'broadcast', theme: 'vice' });
+  const sev = parse(sov.build()), at = active(sev, 4.5);
+  assert.ok(at.some((e) => e.plain === '0' && e.colors.includes(assColor(THEMES.vice.RED).slice(2))), 'real rate in red while held');
+  assert.ok(at.some((e) => e.plain === 'STILL') && at.some((e) => e.plain === 'FRAME ON SCREEN 1500 ms'), 'still tag, held time in ms');
+  assert.ok(sev.some((e) => e.drawing && e.text.includes(sov.g.fps.clip) && e.start > 3.5 && e.start < 5.4), 'FPS line through the still');
+  assert.ok(!sev.some((e) => !e.drawing && e.text.includes(sov.g.ft.clip)), 'no spike tag for a still');
+  const dips = active(sev, 6).filter((e) => !e.drawing && e.text.includes(sov.g.fps.clip));
+  assert.deepEqual(dips.map((e) => e.plain), ['0'], 'one dip tag, at the low');
+  assert.ok(!sev.some((e) => e.drawing && e.text.includes(sov.g.ft.clip) && !e.text.includes(`\\c${assColor(THEMES.vice.BLUE)}`)), 'one line colour');
+  assert.ok(!sev.some((e) => /\\fax/.test(e.text) && !/\\fnIBM/.test(e.text) && e.plain === '30'), 'upright hero');
+  // The long graph is not drawn: the look has its own frame-time graph.
+  assert.equal(createOverlay(a, SIZE, 'Test clip', 30, 'right', SIZE, { style: 'broadcast', longGraph: true }).build(), ov.build());
+});
+
+test('the broadcast look grows with the clip, not with the clip times its window', () => {
+  const count = (seconds) => {
+    const counts = Array.from({ length: seconds * 30 }, (_, i) => (i % 97 === 50 ? 6 : 2));
+    const a = analyse(rowsFromCounts(counts), HZ, 0.4, 30);
+    const ass = createOverlay(a, SIZE, 'Test clip', 30, 'right', SIZE, { style: 'broadcast' }).build();
+    return { events: parse(ass).length, bytes: Buffer.byteLength(ass) };
+  };
+  const short = count(10), long = count(40);
+  assert.ok(long.events / short.events < 4.4 && long.bytes / short.bytes < 4.4, `x${(long.events / short.events).toFixed(2)} events, x${(long.bytes / short.bytes).toFixed(2)} bytes`);
+});
+
 test('the long graph scrolls one moving event per frame', () => {
   const a = analyse(rowsFromCounts([...Array(30).fill(2), 29, ...Array(324).fill(2)]), HZ, 0.4, 30);
   const ass = new Overlay(a, SIZE, 'Test clip', 30, 'left', SIZE,

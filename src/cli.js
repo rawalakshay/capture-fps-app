@@ -8,7 +8,8 @@
 //                           [--resolution source|1080|1440|2160] [--upscaler lanczos|sharp|fsrcnnx]
 //                           [--no-target-pill] [--no-format-pill] [--watermark T | --no-watermark]
 //                           [--caption T] [--caption-position top-left|top-center|top-right|bottom-left|bottom-center|bottom-right]
-//                           [--style panel|strip|glass|compact|none|bands] [--frame 16:9|21:9] [--subtitle T]
+//                           [--style panel|strip|glass|compact|broadcast|none|bands] [--theme classic|mono|aurora|vice]
+//                           [--frame 16:9|21:9] [--subtitle T]
 //                           [--long-graph] [--long-graph-opacity 0.86] [--end-card]
 //   node src/cli.js --compare a_fps.mp4 b_fps.mp4 [c.mp4] [--offsets 0,1.5] [--labels "PS5,PS5 Pro"]
 //                           [--layout h|v|grid] [--out FILE] [--encoder gpu|cpu] [--quality ...] [--cpu-decode]
@@ -23,7 +24,7 @@
 const fs = require('fs');
 const path = require('path');
 const { runJob, compareVideos, compareAB, renderTimeline, normaliseProject, defaultOutDir, QUALITY, ENCODERS, RESOLUTIONS, UPSCALERS, LAYOUTS, AB_SIZES, AB_FITS } = require('./core/pipeline');
-const { POSITIONS, CAPTION_POSITIONS, STYLES } = require('./core/overlay');
+const { POSITIONS, CAPTION_POSITIONS, STYLES, THEME_NAMES } = require('./core/overlay');
 const { gpuStatus } = require('./core/ffmpeg');
 const { parseTime } = require('./core/time');
 
@@ -60,6 +61,7 @@ function parseArgs(argv) {
     else if (a === '--caption') o.caption = next();
     else if (a === '--watermark') o.watermark = next();
     else if (a === '--style') o.style = oneOf(next(), a, STYLES);
+    else if (a === '--theme') o.theme = oneOf(next(), a, THEME_NAMES);
     else if (a === '--long-graph') o.longGraph = true;
     else if (a === '--end-card') o.endCard = true;
     else if (a === '--compare') o.compare = true;

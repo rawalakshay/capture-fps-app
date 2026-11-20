@@ -179,7 +179,6 @@ input[type="range"] { accent-color: var(--primary); flex: 1; min-width: 0; margi
 .vis:checked + .pill { border-color: var(--primary); color: var(--text); }
 .looks { display: grid; gap: 6px; }
 .looks-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.looks-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .look {
   display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 5px 5px 6px; border-radius: 8px; cursor: pointer;
   border: 1px solid var(--line-ctl); background: var(--bg); color: var(--text-2); font-size: 11.5px; font-weight: 500;

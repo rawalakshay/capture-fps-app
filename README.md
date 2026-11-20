@@ -51,7 +51,9 @@ Unsigned builds work but Windows SmartScreen warns on first run.
    Light, OLED black or Midnight; the app remembers it. **Overlay look** picks the Panel (the full instrument panel,
    the default), the Strip (one bar along the top edge), Glass (three
    tiles), Compact (one small tile: FPS, 10 s average and frame time over a
-   frame-time graph) or None (no FPS overlay at all: the video is only upscaled and gets
+   frame-time graph), Broadcast (a corner panel at the top right over a full-width
+   scrolling FPS graph and a frame-time graph; it has no Position and ignores the
+   Frame-time graph switch) or None (no FPS overlay at all: the video is only upscaled and gets
    the watermark, caption and long graph if set). **Position** puts it at the top left, middle or right of
    the frame. **Frame-time graph** adds a scrolling 7.5 s frame-time
    strip across 70 % of the bottom edge, with its own background opacity. The **TARGET** and capture format (**1080P60**) pills
@@ -226,7 +228,8 @@ node src/cli.js run.mp4 [--no-video] [--start S|m:ss] [--end S|m:ss] [--target 3
                         [--no-target-pill] [--no-format-pill] [--watermark T | --no-watermark]
                         [--caption T] [--caption-position top-left|top-center|top-right|
                                                           bottom-left|bottom-center|bottom-right]
-                        [--style panel|strip|glass|compact|none|bands] [--long-graph] [--long-graph-opacity 0.86]
+                        [--style panel|strip|glass|compact|broadcast|none|bands] [--theme classic|mono|aurora|vice]
+                        [--long-graph] [--long-graph-opacity 0.86]
 ```
 
 ## Layout

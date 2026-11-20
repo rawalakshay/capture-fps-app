@@ -222,7 +222,7 @@ async function previewFrame(an, opts = {}, at = 0, { signal } = {}) {
  *         quality = 'standard', resolution = 'source' | '1080' | '1440' | '2160',
  *         overlayRate = 30, hwDecode?, showTarget = true, showFormat = true,
  *         caption?, captionPosition = 'top-left', watermark?,
- *         style = 'panel' | 'strip' | 'glass' | 'compact', longGraph = false, longGraphOpacity = 0.86, endCard = false,
+ *         style = 'panel' | 'strip' | 'glass' | 'compact' | 'broadcast', theme = 'classic' | 'mono' | 'aurora' | 'vice', longGraph = false, longGraphOpacity = 0.86, endCard = false,
  *         upscaler = 'lanczos' | 'sharp' | 'fsrcnnx' (only when resolution is above the recording) }
  * onProgress({ phase: 'overlay'|'render', fraction })
  */

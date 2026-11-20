@@ -512,11 +512,14 @@ syncWatermark();
 // Position, title and pills only exist for looks that draw them.
 function syncStyle() {
   const st = radioValue('opt-style');
-  $('row-pos').hidden = st === 'strip' || st === 'none' || st === 'bands';
+  $('row-pos').hidden = st === 'strip' || st === 'none' || st === 'bands' || st === 'broadcast';
   $('row-title').hidden = st === 'none';
   // Bands draws its own panel: these options do nothing there, so they are not offered.
   $('row-pills').hidden = st === 'none' || st === 'bands';
-  $('row-caption').hidden = $('row-long').hidden = $('row-end-card').hidden = st === 'bands';
+  // Broadcast draws the target pill only.
+  $('opt-format-pill').hidden = document.querySelector('label[for="opt-format-pill"]').hidden = st === 'broadcast';
+  $('row-caption').hidden = $('row-end-card').hidden = st === 'bands';
+  $('row-long').hidden = st === 'bands' || st === 'broadcast'; // broadcast draws its own frame-time graph
   $('bands-hint').hidden = st !== 'bands';
   syncFrame();
   syncGhosts();
@@ -544,7 +547,7 @@ for (const r of document.querySelectorAll('input[name="opt-frame"]')) r.addEvent
 syncStyle();
 
 const THEME_NAME = { mono: 'Mono', aurora: 'Aurora', vice: 'Vice', classic: 'Classic' };
-const STYLE_NAME = { panel: 'Panel', strip: 'Strip', glass: 'Glass', compact: 'Compact', none: 'No overlay', bands: 'Bands' };
+const STYLE_NAME = { panel: 'Panel', strip: 'Strip', glass: 'Glass', compact: 'Compact', broadcast: 'Broadcast', none: 'No overlay', bands: 'Bands' };
 const RES_NAME = { source: 'source size', 1080: '1080p', 1440: '1440p', 2160: '4K' };
 
 // The pill chips show what they would draw; the section headers sum up their settings.
@@ -1211,7 +1214,7 @@ $('open-folder').addEventListener('click', () => {
 function syncGhosts() {
   const pos = radioValue('opt-pos'), st = radioValue('opt-style');
   for (const g of document.querySelectorAll('.ghost')) g.classList.toggle('on', g.dataset.pos === pos);
-  if (state.result && state.result.video === state.lastAnalysed && !state.running) $('ghosts').hidden = st === 'strip' || st === 'none' || st === 'bands';
+  if (state.result && state.result.video === state.lastAnalysed && !state.running) $('ghosts').hidden = st === 'strip' || st === 'none' || st === 'bands' || st === 'broadcast';
 }
 for (const g of document.querySelectorAll('.ghost')) {
   g.addEventListener('click', () => {
